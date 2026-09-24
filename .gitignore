@@ -16,3 +16,6 @@ data/processed/
 .idea/
 dist/
 build/
+# KAIRO internal archives / rollback data
+11_ARCHIVE/
+15_ROLLBACK_SNAPSHOTS/
