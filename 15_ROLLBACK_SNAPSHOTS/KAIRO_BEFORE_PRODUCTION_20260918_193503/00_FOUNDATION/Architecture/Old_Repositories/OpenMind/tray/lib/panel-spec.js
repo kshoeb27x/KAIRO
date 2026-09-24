@@ -1,0 +1,344 @@
+'use strict';
+
+// Panel spec renderer (UI2 A3 -- #483, ADR-0012 decision 3).
+//
+// Plugins contribute panels as declarative specs; this module owns all the
+// drawing. A plugin never ships HTML or JavaScript into the renderer -- it
+// returns JSON describing a widget tree from a fixed vocabulary, and the
+// renderer maps that onto safe markup.
+//
+// v1 vocabulary (this slice): { list, detail }. The text widget is A4 (#484).
+//
+// SECURITY: every string that came from a plugin is passed through escHtml
+// before it reaches the returned markup. An HTML-bearing plugin value is
+// escaped, never executed. Unknown widget types are ignored (return ''), so
+// a malformed spec cannot inject markup.
+//
+// Dual-mode: same source feeds the renderer via <script src> (exports on
+// window.PanelSpec) and the Node tests via require(). IIFE-wrapped so the
+// private helpers stay function-scoped (see renderer-script-globals.test.js).
+
+(function () {
+  function escHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function _renderList(w) {
+    var items = Array.isArray(w && w.items) ? w.items : [];
+    if (items.length === 0) {
+      return '<div class="ps-empty">Empty.</div>';
+    }
+    var rows = items.map(function (it) {
+      if (!it || typeof it !== 'object') return '';
+      var title = escHtml(it.title || '');
+      var sub   = it.subtitle
+        ? '<div class="ps-list-sub">' + escHtml(it.subtitle) + '</div>'
+        : '';
+      return '<li class="ps-list-item">' +
+        '<div class="ps-list-title">' + title + '</div>' +
+        sub +
+      '</li>';
+    }).join('');
+    return '<ul class="ps-list">' + rows + '</ul>';
+  }
+
+  function _renderDetail(w) {
+    var fields = Array.isArray(w && w.fields) ? w.fields : [];
+    if (fields.length === 0) {
+      return '<div class="ps-empty">No details.</div>';
+    }
+    var rows = fields.map(function (f) {
+      if (!f || typeof f !== 'object') return '';
+      // hint -> native title tooltip (delayed hover, no CSS/JS). Used by the
+      // Skills panel to show a skill's description on hover without bloating
+      // the row. cursor:help signals the row is hoverable.
+      var hint = f.hint
+        ? ' title="' + escHtml(f.hint) + '" style="cursor:help"'
+        : '';
+      return '<div class="ps-detail-row"' + hint + '>' +
+        '<div class="ps-detail-label">' + escHtml(f.label || '') + '</div>' +
+        '<div class="ps-detail-value">' + escHtml(f.value == null ? '' : f.value) + '</div>' +
+      '</div>';
+    }).join('');
+    return '<div class="ps-detail">' + rows + '</div>';
+  }
+
+  // UI2 A4 (#484): text widget -- editable <textarea> that saves back via a plugin tool.
+  // value is HTML-escaped so a file containing <tags> is inert when inserted via innerHTML.
+  // The save handler (text-widget.js) reads textarea.value which un-escapes automatically.
+  function _renderText(w) {
+    var id       = escHtml(w.id || '');
+    var tool     = escHtml(w.tool || '');
+    var toolArgs = escHtml(JSON.stringify(w.tool_args != null ? w.tool_args : {}));
+    var value    = escHtml(String(w.value == null ? '' : w.value));
+    var label    = w.label
+      ? '<div class="ps-text-label">' + escHtml(w.label) + '</div>'
+      : '';
+    return (
+      '<div class="ps-text"' +
+        ' data-widget-id="' + id + '"' +
+        ' data-tool="'      + tool + '"' +
+        ' data-tool-args="' + toolArgs + '">' +
+        label +
+        '<textarea class="ps-text-area">' + value + '</textarea>' +
+        '<div class="ps-text-toolbar">' +
+          '<span class="ps-text-status"></span>' +
+          '<button class="ps-text-save">Save</button>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  // S5 #542 (Skills panel, ADR-0014 decision 8): action widget -- a button
+  // that calls a plugin tool with fixed tool_args, optionally plus one
+  // user-typed value (input_arg names which arg the input's value fills).
+  // No input_arg -> a plain confirm-style button (uninstall, enable/disable).
+  // Handler lives in action-widget.js, same shape as the text widget's Save.
+  function _renderAction(w) {
+    var id       = escHtml(w.id || '');
+    var tool     = escHtml(w.tool || '');
+    var toolArgs = escHtml(JSON.stringify(w.tool_args != null ? w.tool_args : {}));
+    var label    = escHtml(w.label || 'Run');
+    var inputArg = w.input_arg ? escHtml(w.input_arg) : '';
+    var input    = inputArg
+      ? '<input class="ps-action-input" type="text" placeholder="' +
+          escHtml(w.input_placeholder || '') + '">'
+      : '';
+    // Optional second field (e.g. a category alongside a URL). Backward-compatible:
+    // widgets without input_arg2 render exactly as before.
+    var inputArg2 = w.input_arg2 ? escHtml(w.input_arg2) : '';
+    var input2    = inputArg2
+      ? '<input class="ps-action-input2" type="text" placeholder="' +
+          escHtml(w.input_placeholder2 || '') + '">'
+      : '';
+    // Optional boolean field (e.g. a verify toggle). checkbox_arg names the
+    // tool arg; checkbox_checked is its default state. Sends a real boolean.
+    var checkArg  = w.checkbox_arg ? escHtml(w.checkbox_arg) : '';
+    var checkbox  = checkArg
+      ? '<label class="ps-action-check-wrap">' +
+          '<input class="ps-action-check" type="checkbox"' +
+            (w.checkbox_checked ? ' checked' : '') + '>' +
+          escHtml(w.checkbox_label || '') +
+        '</label>'
+      : '';
+    return (
+      '<div class="ps-action"' +
+        ' data-widget-id="' + id + '"' +
+        ' data-tool="'      + tool + '"' +
+        ' data-tool-args="' + toolArgs + '"' +
+        (inputArg ? ' data-input-arg="' + inputArg + '"' : '') +
+        (inputArg2 ? ' data-input-arg2="' + inputArg2 + '"' : '') +
+        (checkArg ? ' data-checkbox-arg="' + checkArg + '"' : '') +
+        '>' +
+        input +
+        input2 +
+        checkbox +
+        '<button class="ps-action-btn" type="button">' + label + '</button>' +
+        '<span class="ps-action-status"></span>' +
+      '</div>'
+    );
+  }
+
+  // Group widget -- a native <details> collapsible wrapping child widgets.
+  // Used by the Videos panel to fold each collection (money ideas, harness
+  // improvement, ...) into its own section. Native HTML: no JS, no click
+  // wiring, keyboard-accessible for free. ``open`` starts it expanded.
+  function _renderGroup(w) {
+    var label = escHtml(w.label || '');
+    var count = (w.count != null)
+      ? ' <span class="ps-group-count">' + escHtml(w.count) + '</span>'
+      : '';
+    var open  = w.open ? ' open' : '';
+    // data-collection marks this group as a drop target for cluster rows dragged
+    // from another collection (manual move). Empty for non-collection groups.
+    var coll  = w.collection ? ' data-collection="' + escHtml(w.collection) + '"' : '';
+    var children = Array.isArray(w.widgets) ? w.widgets.map(renderWidget).join('') : '';
+    return (
+      '<details class="ps-group"' + open + coll + '>' +
+        '<summary class="ps-group-summary">' + label + count + '</summary>' +
+        '<div class="ps-group-body">' + children + '</div>' +
+      '</details>'
+    );
+  }
+
+  // Cluster widget -- one idea cluster as a draggable row with a "Move to…"
+  // <select>. Both the select and dragging the row onto another collection group
+  // fire the move_tool (video_move_cluster) via action-widget.js. Replaces the
+  // per-collection table so each cluster can carry its own move control.
+  function _renderCluster(w) {
+    var cid   = escHtml(String(w.cluster_id == null ? '' : w.cluster_id));
+    var label = escHtml(w.label || '');
+    var stats = w.stats
+      ? '<span class="ps-cluster-stats">' + escHtml(w.stats) + '</span>'
+      : '';
+    var tool  = escHtml(w.move_tool || 'video_move_cluster');
+    var cur   = w.collection || '';
+    var opts  = Array.isArray(w.collections) ? w.collections : [];
+    var options = '<option value="" selected>Move to…</option>';
+    for (var i = 0; i < opts.length; i++) {
+      if (opts[i] === cur) continue;  // can't move to its own collection
+      options += '<option value="' + escHtml(opts[i]) + '">' + escHtml(opts[i]) + '</option>';
+    }
+    return (
+      '<div class="ps-cluster" draggable="true" data-cluster-id="' + cid + '"' +
+        ' data-move-tool="' + tool + '">' +
+        '<div class="ps-cluster-main">' +
+          '<span class="ps-cluster-label">' + label + '</span>' + stats +
+        '</div>' +
+        '<select class="ps-cluster-move" aria-label="Move to another collection">' +
+          options +
+        '</select>' +
+      '</div>'
+    );
+  }
+
+  // Toggle widget -- an on/off switch (Skills enable/disable). Unlike the
+  // action button, it shows current state at a glance (checked = on) and flips
+  // optimistically on click; the panel re-render on the tool's panel_spec
+  // broadcast confirms or corrects it. ``checked`` is the current state;
+  // ``enable_tool`` fires when switching on, ``disable_tool`` when switching
+  // off (both with the same ``tool_args``). Handler lives in action-widget.js.
+  function _renderToggle(w) {
+    var id          = escHtml(w.id || '');
+    var toolArgs    = escHtml(JSON.stringify(w.tool_args != null ? w.tool_args : {}));
+    var enableTool  = escHtml(w.enable_tool || '');
+    var disableTool = escHtml(w.disable_tool || '');
+    var checked     = w.checked ? ' checked' : '';
+    var label       = w.label
+      ? '<span class="ps-toggle-label">' + escHtml(w.label) + '</span>'
+      : '';
+    return (
+      '<label class="ps-toggle"' +
+        ' data-widget-id="'   + id + '"' +
+        ' data-enable-tool="' + enableTool + '"' +
+        ' data-disable-tool="' + disableTool + '"' +
+        ' data-tool-args="'   + toolArgs + '">' +
+        '<input class="ps-toggle-input" type="checkbox"' + checked + '>' +
+        '<span class="ps-toggle-slider"></span>' +
+        label +
+        '<span class="ps-toggle-status"></span>' +
+      '</label>'
+    );
+  }
+
+  // Table widget -- read-only columnar data (ADR-0012 / ADR-0017 S4 #643).
+  // columns: string[] header labels; rows: string[][] cell values.
+  // All values are escaped; unknown/empty tables render an inert empty state.
+  function _renderTable(w) {
+    var cols = Array.isArray(w && w.columns) ? w.columns : [];
+    var rows = Array.isArray(w && w.rows) ? w.rows : [];
+    if (cols.length === 0 && rows.length === 0) {
+      return '<div class="ps-empty">No data.</div>';
+    }
+    var head = '';
+    if (cols.length) {
+      head = '<thead><tr>' +
+        cols.map(function (c) { return '<th class="ps-th">' + escHtml(c) + '</th>'; }).join('') +
+        '</tr></thead>';
+    }
+    var body = rows.map(function (row) {
+      var cells = Array.isArray(row) ? row : [];
+      return '<tr>' +
+        cells.map(function (c) { return '<td class="ps-td">' + escHtml(c == null ? '' : c) + '</td>'; }).join('') +
+        '</tr>';
+    }).join('');
+    return '<table class="ps-table">' + head + '<tbody>' + body + '</tbody></table>';
+  }
+
+  // Registry widget -- installed components list (ADR-0035 S10/G, #1123).
+  // Each row shows name, status, a VerifyResult badge (passed/evidence hover, score),
+  // and actions rendered as ps-action widgets (declared tool call, no onclick).
+  function _renderRegistry(w) {
+    var items = Array.isArray(w && w.items) ? w.items : [];
+    if (items.length === 0) {
+      return '<div class="ps-empty">No registry entries.</div>';
+    }
+    var rows = items.map(function (it) {
+      if (!it || typeof it !== 'object') return '';
+      var name = escHtml(it.name || '');
+      var status = escHtml(it.status || '');
+      var badge = '';
+      var verify = it.verify;
+      if (verify && typeof verify === 'object') {
+        var passed = verify.passed;
+        var score = verify.score;
+        var evidence = verify.evidence;
+        if (passed !== undefined) {
+          var cls = passed ? 'ps-verify-passed' : 'ps-verify-failed';
+          var txt = passed ? 'Passed' : 'Failed';
+          if (score !== undefined) txt += ' (' + escHtml(String(score)) + ')';
+          badge = '<span class="' + cls + '" title="' + escHtml(evidence || '') + '">' + txt + '</span>';
+        }
+      }
+      var actionsHtml = '';
+      if (Array.isArray(it.actions)) {
+        actionsHtml = it.actions.map(function (a) {
+          return _renderAction(a);
+        }).join('');
+      }
+      var hintAttr = it.hint ? ' title="' + escHtml(it.hint) + '"' : '';
+      return (
+        '<div class="ps-registry-row">' +
+          '<span class="ps-registry-name"' + hintAttr + '>' + name + '</span>' +
+          '<span class="ps-registry-status">' + status + '</span>' +
+          badge +
+          '<div class="ps-registry-actions">' + actionsHtml + '</div>' +
+        '</div>'
+      );
+    }).join('');
+    return (
+      '<div class="ps-registry">' + rows + '</div>'
+    );
+  }
+
+  var WIDGETS = {
+    list:   _renderList,
+    detail: _renderDetail,
+    text:   _renderText,
+    action: _renderAction,
+    toggle: _renderToggle,
+    table:   _renderTable,
+    group:   _renderGroup,
+    cluster: _renderCluster,
+    registry: _renderRegistry,
+  };
+
+  // Renders one widget. Unknown or malformed types return '' -- inert.
+  function renderWidget(w) {
+    if (!w || typeof w !== 'object') return '';
+    var fn = WIDGETS[w.type];
+    if (typeof fn !== 'function') return '';
+    return fn(w);
+  }
+
+  // Renders a full panel spec {title, widgets: [...]} into an HTML string.
+  // Bad spec (null, non-object) yields an inert empty-state marker.
+  function renderPanel(spec) {
+    if (!spec || typeof spec !== 'object') {
+      return '<div class="ps-empty">No panel data.</div>';
+    }
+    var title = spec.title
+      ? '<h2 class="ps-title">' + escHtml(spec.title) + '</h2>'
+      : '';
+    var widgets = Array.isArray(spec.widgets) ? spec.widgets : [];
+    var body = widgets.map(renderWidget).join('');
+    return '<div class="ps-panel">' + title + body + '</div>';
+  }
+
+  var _exports = {
+    escHtml:      escHtml,
+    renderWidget: renderWidget,
+    renderPanel:  renderPanel,
+    WIDGET_TYPES: Object.keys(WIDGETS),
+  };
+
+  if (typeof module === 'object' && module && module.exports) {
+    module.exports = _exports;
+  } else if (typeof window !== 'undefined') {
+    window.PanelSpec = _exports;
+  }
+})();

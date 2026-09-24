@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-14T12:00:00Z",
+  "bot": { "name": "SampleBot", "strategyVersion": "demo-0.1" },
+  "mode": "simulated",
+  "running": true,
+  "account": { "equity": 10000, "currency": "USD", "riskExposurePct": 8.5 },
+  "performance": {
+    "pnlTotal": 142.5,
+    "pnlPeriod": 12.25,
+    "maxDrawdownPct": 4.2,
+    "winRatePct": 54,
+    "sampleTrades": 13
+  },
+  "recentTrades": [
+    {
+      "time": "2026-07-14T11:45:00Z",
+      "symbol": "BTC-USD",
+      "side": "long",
+      "quantity": 0.01,
+      "entry": 64200.5,
+      "exit": 64510.0,
+      "pnl": 3.1,
+      "reason": "momentum breakout signal"
+    },
+    {
+      "time": "2026-07-14T10:20:00Z",
+      "symbol": "ETH-USD",
+      "side": "short",
+      "quantity": 0.2,
+      "entry": 3120.0,
+      "exit": 3138.4,
+      "pnl": -3.68,
+      "reason": "mean-reversion signal invalidated"
+    }
+  ],
+  "recentDecisions": [
+    { "time": "2026-07-14T11:44:00Z", "summary": "Entered BTC long on momentum breakout" },
+    { "time": "2026-07-14T11:00:00Z", "summary": "Skipped SOL signal: spread above threshold" }
+  ],
+  "errors": [],
+  "warnings": ["Order book feed reconnected twice in the last hour"],
+  "strategyChanges": [
+    { "time": "2026-07-13T09:00:00Z", "summary": "Tightened stop-loss from 2.5% to 2.0%" }
+  ]
+}

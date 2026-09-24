@@ -1,0 +1,887 @@
+"""Tests for cerebral/trading/discovery.py (S27/#880).
+
+Pure and duck-typed -- every external call (run_gauntlet, judge_idea,
+Activity Log) is injected. No network, no real LLM, no real sandbox.
+"""
+import pytest
+from unittest.mock import patch
+
+from cerebral.trading.discovery import (
+    DiscoveryAttempts,
+    DiscoveryWatchlist,
+    VettedTickers,
+    extract_ticker,
+    process_idea,
+    run_discovery_pass,
+)
+from cerebral.trading_ideas import Idea, from_prose
+
+
+def _watchlist(tmp_path):
+    return DiscoveryWatchlist(db_path=tmp_path / "watchlist.db")
+
+
+def _ticker_idea(symbol="AAPL"):
+    return Idea(
+        source_url=f"https://example.com/{symbol.lower()}-news",
+        page_title=f"{symbol} beats earnings",
+        claim_text=f"{symbol} tends to rally after strong earnings beats.",
+        provenance=f"url: https://example.com/{symbol.lower()}-news",
+    )
+
+
+def _pattern_idea():
+    return from_prose("Mean reversion after a 3-day losing streak.")
+
+
+class RecordingGauntlet:
+    """Fake run_gauntlet_fn that records every call."""
+    def __init__(self):
+        self.calls = []
+
+    async def __call__(self, idea: Idea, ticker: str) -> dict:
+        self.calls.append((idea, ticker))
+        return {"ticker": ticker, "verdict": "VALIDATED"}
+
+
+class FixedJudge:
+    def __init__(self, accepted: bool, reason: str = "test reason"):
+        self._accepted = accepted
+        self._reason = reason
+        self.calls = []
+
+    async def __call__(self, idea: Idea):
+        self.calls.append(idea)
+        return self._accepted, self._reason
+
+
+class RecordingActivity:
+    def __init__(self):
+        self.calls = []
+
+    async def __call__(self, kind, content):
+        self.calls.append((kind, content))
+
+
+class RecordingAttempt:
+    """Fake record_attempt_fn (S30/#894) -- records every call verbatim."""
+    def __init__(self):
+        self.calls = []
+
+    async def __call__(self, entry: dict) -> None:
+        self.calls.append(entry)
+
+
+class UnvalidatedGauntlet:
+    """Fake run_gauntlet_fn returning the flat test shape with a failed gate."""
+    async def __call__(self, idea: Idea, ticker: str) -> dict:
+        return {
+            "ticker": ticker, "verdict": "UNVALIDATED",
+            "gates": [
+                {"name": "vs_benchmark", "passed": False, "details": "underperformed by 3.2%"},
+            ],
+        }
+
+
+# ── DiscoveryWatchlist ───────────────────────────────────────────────────
+
+def test_watchlist_upsert_is_idempotent_on_symbol(tmp_path):
+    wl = _watchlist(tmp_path)
+    wl.upsert("AAPL", source="url: x")
+    wl.upsert("AAPL", source="url: y")
+
+    assert wl.symbols() == ["AAPL"]
+
+
+def test_watchlist_prefilter_candidates_caps_at_limit(tmp_path):
+    wl = _watchlist(tmp_path)
+    for sym in ["AAPL", "MSFT", "GOOGL", "TSLA"]:
+        wl.upsert(sym)
+
+    candidates = wl.prefilter_candidates(_pattern_idea(), limit=2)
+
+    assert len(candidates) == 2
+
+
+def test_watchlist_prefilter_candidates_falls_back_to_known_tickers_when_empty(tmp_path):
+    """Fix (2026-08-25): an empty watchlist used to return [] here forever
+    -- the watchlist only grows via a dispatch, and a pattern-general idea
+    only dispatches via this method's return value, so a cold start could
+    never bootstrap itself. Confirmed live: the first real discovery pass
+    against the real web_search wiring sourced 6 ideas, dispatched 0."""
+    from cerebral.trading.discovery import _KNOWN_TICKERS
+    wl = _watchlist(tmp_path)
+
+    candidates = wl.prefilter_candidates(_pattern_idea(), limit=3)
+
+    assert len(candidates) == 3
+    assert all(c in _KNOWN_TICKERS for c in candidates)
+
+
+def test_watchlist_prefilter_candidates_puts_real_watchlist_entries_first(tmp_path):
+    """A screened ticker still comes before the known-liquid overflow --
+    but (fix, 2026-08-26) no longer excludes it entirely. The old
+    behavior (fallback never applies once the watchlist has anything on
+    it) is exactly what left a real watchlist stuck at 3 symbols for over
+    a day live -- see prefilter_candidates' own docstring."""
+    from cerebral.trading.discovery import _KNOWN_TICKERS
+    wl = _watchlist(tmp_path)
+    wl.upsert("PLTR")  # deliberately NOT in _KNOWN_TICKERS
+
+    candidates = wl.prefilter_candidates(_pattern_idea(), limit=3)
+
+    assert candidates[0] == "PLTR"
+    assert len(candidates) == 3
+    assert all(c in _KNOWN_TICKERS for c in candidates[1:])
+
+
+def test_watchlist_prefilter_candidates_never_duplicates_a_watchlist_symbol_already_in_known_tickers(tmp_path):
+    """A watchlist symbol that's ALSO in _KNOWN_TICKERS (e.g. AAPL, seeded
+    by an earlier ticker-specific dispatch) must appear once, not twice,
+    in the combined universe."""
+    wl = _watchlist(tmp_path)
+    wl.upsert("AAPL")  # IS in _KNOWN_TICKERS
+
+    candidates = wl.prefilter_candidates(_pattern_idea(), limit=100)
+
+    assert candidates.count("AAPL") == 1
+
+
+def test_watchlist_prefilter_candidates_keeps_widening_once_watchlist_exceeds_limit(tmp_path):
+    """Real bug, live-observed (2026-08-31): the 2026-08-26 overflow fix
+    only helps while len(watchlist) < limit -- universe[:limit] silently
+    becomes existing[:limit] the moment the watchlist grows past `limit`,
+    permanently excluding known-liquid overflow again (same failure mode
+    as the bug that fix was supposed to close, just delayed). A real
+    watchlist reached 14 entries within days and then stayed at exactly
+    those 14 for three more days straight."""
+    from cerebral.trading.discovery import _KNOWN_TICKERS
+    wl = _watchlist(tmp_path)
+    for sym in ["PLTR", "SNOW", "DDOG", "NET", "SHOP"]:  # 5 >= limit(3), none in _KNOWN_TICKERS
+        wl.upsert(sym)
+
+    candidates = wl.prefilter_candidates(_pattern_idea(), limit=3)
+
+    assert len(candidates) == 3
+    assert candidates[:2] == ["SHOP", "NET"]  # most-recently-screened watchlist entries, unchanged
+    assert candidates[2] in _KNOWN_TICKERS  # the last slot still introduces something new
+    assert candidates[2] not in ("PLTR", "SNOW", "DDOG", "NET", "SHOP")
+
+
+def test_watchlist_prefilter_candidates_widening_slot_advances_as_overflow_gets_adopted(tmp_path):
+    """Each newly-adopted overflow symbol moves from overflow into
+    existing, so the next call's widening slot offers the NEXT unseen
+    known-liquid symbol, not the same one forever."""
+    wl = _watchlist(tmp_path)
+    for sym in ["PLTR", "SNOW", "DDOG"]:
+        wl.upsert(sym)
+
+    first = wl.prefilter_candidates(_pattern_idea(), limit=3)
+    newly_adopted = first[2]
+    wl.upsert(newly_adopted)  # what process_idea would do on dispatch
+
+    second = wl.prefilter_candidates(_pattern_idea(), limit=3)
+
+    assert second[2] != newly_adopted
+
+
+def test_watchlist_prefilter_candidates_reserves_multiple_overflow_slots_at_limit_10(tmp_path):
+    """At limit=10, overflow_slots = max(1, 10 // 3) = 3.
+    Asserts that MORE than one never-seen known-liquid symbol appears in the result,
+    scaling the reservation width instead of hardcoding a single slot."""
+    from cerebral.trading.discovery import _KNOWN_TICKERS
+    wl = _watchlist(tmp_path)
+    # Seed watchlist to >= limit(10)
+    for sym in [f"DUMMY{i}" for i in range(10)]:
+        wl.upsert(sym)
+
+    candidates = wl.prefilter_candidates(_pattern_idea(), limit=10)
+
+    overflow_in_result = [c for c in candidates if c in _KNOWN_TICKERS]
+    assert len(overflow_in_result) > 1
+    assert len(overflow_in_result) == 3
+
+
+# ── extract_ticker ────────────────────────────────────────────────────────
+
+def test_extract_ticker_recognizes_a_known_symbol():
+    idea = _ticker_idea("TSLA")
+    assert extract_ticker(idea) == "TSLA"
+
+
+def test_extract_ticker_returns_none_for_pattern_general_idea():
+    idea = _pattern_idea()
+    assert extract_ticker(idea) is None
+
+
+def test_extract_ticker_does_not_guess_an_unknown_all_caps_word():
+    """Conservative by design: an unrecognized all-caps token (e.g. an
+    acronym) must not be mistaken for a ticker -- screen by default."""
+    idea = Idea(claim_text="RSI and MACD both signal a reversal soon.")
+    assert extract_ticker(idea) is None
+
+
+def test_extract_ticker_falls_through_on_bare_single_letter_F():
+    """A standalone capital 'F' in prose (e.g. grade, variable, word start)
+    must NOT be mistaken for the Ford ticker. Only the cashtag `$F` counts."""
+    idea = Idea(claim_text="The student received an F on the test.")
+    assert extract_ticker(idea) is None
+
+
+def test_extract_ticker_handles_cashtag_F():
+    """Single-letter tickers should only match when explicitly prefixed
+    with a cashtag ($), matching the stricter signal requirement."""
+    idea = Idea(claim_text="Investors are buying $F ahead of earnings.")
+    assert extract_ticker(idea) == "F"
+
+
+# ── process_idea: ticker-specific path (decision #36) ────────────────────
+
+async def test_ticker_specific_idea_skips_the_judge_entirely(tmp_path):
+    wl = _watchlist(tmp_path)
+    gauntlet = RecordingGauntlet()
+    judge = FixedJudge(accepted=False)  # would reject everything, if ever called
+
+    results = await process_idea(_ticker_idea("AAPL"), wl, gauntlet, judge_idea_fn=judge)
+
+    assert len(results) == 1
+    assert results[0]["ticker"] == "AAPL"
+    assert judge.calls == []  # never consulted
+    assert len(gauntlet.calls) == 1
+
+
+async def test_ticker_specific_idea_registers_on_the_watchlist(tmp_path):
+    wl = _watchlist(tmp_path)
+    await process_idea(_ticker_idea("AAPL"), wl, RecordingGauntlet())
+
+    assert "AAPL" in wl.symbols()
+
+
+async def test_ticker_specific_idea_logs_to_the_activity_log(tmp_path):
+    wl = _watchlist(tmp_path)
+    activity = RecordingActivity()
+
+    await process_idea(_ticker_idea("AAPL"), wl, RecordingGauntlet(), record_activity_fn=activity)
+
+    assert len(activity.calls) == 1
+    kind, content = activity.calls[0]
+    assert content["source"] == "discovery"
+    assert content["status"] == "dispatched"
+    assert content["ticker"] == "AAPL"
+
+
+# ── process_idea: pattern-general path (decisions #44, #36) ─────────────
+
+async def test_pattern_general_idea_is_judged_first(tmp_path):
+    wl = _watchlist(tmp_path)
+    judge = FixedJudge(accepted=True)
+
+    await process_idea(_pattern_idea(), wl, RecordingGauntlet(), judge_idea_fn=judge)
+
+    assert len(judge.calls) == 1
+
+
+async def test_rejected_idea_never_reaches_run_gauntlet(tmp_path):
+    """The acceptance test #880 names explicitly."""
+    wl = _watchlist(tmp_path)
+    gauntlet = RecordingGauntlet()
+    judge = FixedJudge(accepted=False, reason="too vague")
+
+    results = await process_idea(_pattern_idea(), wl, gauntlet, judge_idea_fn=judge)
+
+    assert results == []
+    assert gauntlet.calls == []
+
+
+async def test_rejected_idea_logs_to_the_activity_log(tmp_path):
+    wl = _watchlist(tmp_path)
+    activity = RecordingActivity()
+    judge = FixedJudge(accepted=False, reason="too vague")
+
+    await process_idea(_pattern_idea(), wl, RecordingGauntlet(),
+                        judge_idea_fn=judge, record_activity_fn=activity)
+
+    assert len(activity.calls) == 1
+    kind, content = activity.calls[0]
+    assert content["status"] == "rejected"
+    assert content["reason"] == "too vague"
+
+
+async def test_accepted_pattern_idea_only_dispatches_the_prefiltered_candidates(tmp_path):
+    """Only the watchlist's pre-filtered candidates reach run_gauntlet --
+    not an unbounded universe sweep. Bounded to _KNOWN_TICKERS (watchlist
+    entries are always known-liquid too here), not asserting the exact 2
+    symbols -- the 2026-08-31 widening fix legitimately swaps the last
+    slot for a not-yet-seen known ticker once the watchlist reaches
+    candidate_limit, which is exactly what this test's own watchlist size
+    (2) does at candidate_limit=2."""
+    from cerebral.trading.discovery import _KNOWN_TICKERS
+    wl = _watchlist(tmp_path)
+    for sym in ["AAPL", "MSFT"]:
+        wl.upsert(sym)
+    gauntlet = RecordingGauntlet()
+    judge = FixedJudge(accepted=True)
+
+    results = await process_idea(_pattern_idea(), wl, gauntlet, judge_idea_fn=judge, candidate_limit=2)
+
+    dispatched_tickers = {c[1] for c in gauntlet.calls}
+    assert dispatched_tickers <= _KNOWN_TICKERS
+    assert len(dispatched_tickers) == 2
+    assert len(results) == 2
+
+
+async def test_accepted_idea_with_empty_watchlist_dispatches_the_known_ticker_fallback(tmp_path):
+    """Updated (2026-08-25): this used to assert dispatches nothing --
+    that was the real, live cold-start deadlock (see
+    test_watchlist_prefilter_candidates_falls_back_to_known_tickers_when_empty).
+    An accepted pattern-general idea now reaches the gauntlet even before
+    anything has ever been screened, via _KNOWN_TICKERS."""
+    from cerebral.trading.discovery import _KNOWN_TICKERS
+    wl = _watchlist(tmp_path)
+    gauntlet = RecordingGauntlet()
+    judge = FixedJudge(accepted=True)
+
+    results = await process_idea(_pattern_idea(), wl, gauntlet, judge_idea_fn=judge)
+
+    assert len(results) > 0
+    dispatched_tickers = {c[1] for c in gauntlet.calls}
+    assert dispatched_tickers.issubset(_KNOWN_TICKERS)
+
+
+async def test_no_judge_configured_accepts_by_default(tmp_path):
+    wl = _watchlist(tmp_path)
+    wl.upsert("AAPL")
+    gauntlet = RecordingGauntlet()
+
+    results = await process_idea(_pattern_idea(), wl, gauntlet, judge_idea_fn=None, candidate_limit=1)
+
+    assert len(results) == 1
+
+
+# ── process_idea: S41 Tally candidate_limit bias ────────────────────────
+# S41's own PR left _run_tally (imported here from trading_ideas) as a
+# permanent stub always returning (False, 0, 0) -- this bias code path was
+# dead in production and had zero test coverage. Patch the name as bound
+# in THIS module (`from ... import _run_tally` copies the reference at
+# import time, so patching trading_ideas._run_tally would not reach here).
+
+def _populate(wl, n):
+    symbols = ["AAPL", "MSFT", "GOOGL", "TSLA", "NVDA", "META"][:n]
+    for sym in symbols:
+        wl.upsert(sym)
+    return symbols
+
+
+async def test_high_tally_biases_candidate_limit_up(tmp_path):
+    wl = _watchlist(tmp_path)
+    _populate(wl, 5)
+    gauntlet = RecordingGauntlet()
+    judge = FixedJudge(accepted=True)
+
+    with patch("cerebral.trading.discovery._run_tally", return_value=(True, 3, 5)):  # 60% positive
+        results = await process_idea(_pattern_idea(), wl, gauntlet, judge_idea_fn=judge, candidate_limit=2)
+
+    assert len(results) == 3  # 2 + 1
+
+
+async def test_low_tally_biases_candidate_limit_down(tmp_path):
+    wl = _watchlist(tmp_path)
+    _populate(wl, 5)
+    gauntlet = RecordingGauntlet()
+    judge = FixedJudge(accepted=True)
+
+    with patch("cerebral.trading.discovery._run_tally", return_value=(True, 1, 5)):  # 20% positive
+        results = await process_idea(_pattern_idea(), wl, gauntlet, judge_idea_fn=judge, candidate_limit=2)
+
+    assert len(results) == 1  # 2 - 1
+
+
+async def test_low_tally_bias_floors_at_one_not_zero(tmp_path):
+    wl = _watchlist(tmp_path)
+    _populate(wl, 5)
+    gauntlet = RecordingGauntlet()
+    judge = FixedJudge(accepted=True)
+
+    with patch("cerebral.trading.discovery._run_tally", return_value=(True, 0, 5)):  # 0% positive
+        results = await process_idea(_pattern_idea(), wl, gauntlet, judge_idea_fn=judge, candidate_limit=1)
+
+    assert len(results) == 1  # max(1, 1 - 1) == 1, never 0
+
+
+async def test_mid_tally_does_not_bias_candidate_limit(tmp_path):
+    wl = _watchlist(tmp_path)
+    _populate(wl, 5)
+    gauntlet = RecordingGauntlet()
+    judge = FixedJudge(accepted=True)
+
+    with patch("cerebral.trading.discovery._run_tally", return_value=(True, 2, 4)):  # 50% -- between thresholds
+        results = await process_idea(_pattern_idea(), wl, gauntlet, judge_idea_fn=judge, candidate_limit=2)
+
+    assert len(results) == 2  # unchanged
+
+
+async def test_unavailable_tally_does_not_bias_candidate_limit(tmp_path):
+    wl = _watchlist(tmp_path)
+    _populate(wl, 5)
+    gauntlet = RecordingGauntlet()
+    judge = FixedJudge(accepted=True)
+
+    with patch("cerebral.trading.discovery._run_tally", return_value=(False, 0, 0)):
+        results = await process_idea(_pattern_idea(), wl, gauntlet, judge_idea_fn=judge, candidate_limit=2)
+
+    assert len(results) == 2  # unchanged, same as the real stub's default behavior
+
+
+# ── process_idea: S45 Activity Log entry for the Tally/bias decision ────
+# S45's own PR left this untested -- only cerebral/trading/discovery.py was
+# touched, no test file. Hand-added, covering the issue's own acceptance
+# criteria: available tally logs the entry with correct before/after
+# values at each bias tier, unavailable tally logs nothing.
+
+async def test_available_tally_logs_activity_entry_with_before_after(tmp_path):
+    wl = _watchlist(tmp_path)
+    _populate(wl, 5)
+    gauntlet = RecordingGauntlet()
+    judge = FixedJudge(accepted=True)
+    activity = RecordingActivity()
+
+    with patch("cerebral.trading.discovery._run_tally", return_value=(True, 3, 5)):  # 60% -> +1
+        await process_idea(
+            _pattern_idea(), wl, gauntlet, judge_idea_fn=judge,
+            record_activity_fn=activity, candidate_limit=2,
+        )
+
+    tally_entries = [c for c in activity.calls if c[1].get("source") == "trading_tally"]
+    assert len(tally_entries) == 1
+    entry = tally_entries[0][1]
+    assert entry["positive"] == 3
+    assert entry["total"] == 5
+    assert entry["candidate_limit_before"] == 2
+    assert entry["candidate_limit_after"] == 3
+
+
+async def test_available_tally_at_low_tier_logs_correct_before_after(tmp_path):
+    wl = _watchlist(tmp_path)
+    _populate(wl, 5)
+    gauntlet = RecordingGauntlet()
+    judge = FixedJudge(accepted=True)
+    activity = RecordingActivity()
+
+    with patch("cerebral.trading.discovery._run_tally", return_value=(True, 1, 5)):  # 20% -> -1
+        await process_idea(
+            _pattern_idea(), wl, gauntlet, judge_idea_fn=judge,
+            record_activity_fn=activity, candidate_limit=2,
+        )
+
+    tally_entries = [c for c in activity.calls if c[1].get("source") == "trading_tally"]
+    assert len(tally_entries) == 1
+    entry = tally_entries[0][1]
+    assert entry["candidate_limit_before"] == 2
+    assert entry["candidate_limit_after"] == 1
+
+
+async def test_available_tally_between_thresholds_logs_unchanged_before_after(tmp_path):
+    wl = _watchlist(tmp_path)
+    _populate(wl, 5)
+    gauntlet = RecordingGauntlet()
+    judge = FixedJudge(accepted=True)
+    activity = RecordingActivity()
+
+    with patch("cerebral.trading.discovery._run_tally", return_value=(True, 2, 4)):  # 50% -- no bias
+        await process_idea(
+            _pattern_idea(), wl, gauntlet, judge_idea_fn=judge,
+            record_activity_fn=activity, candidate_limit=2,
+        )
+
+    tally_entries = [c for c in activity.calls if c[1].get("source") == "trading_tally"]
+    assert len(tally_entries) == 1
+    entry = tally_entries[0][1]
+    assert entry["candidate_limit_before"] == entry["candidate_limit_after"] == 2
+
+
+async def test_unavailable_tally_logs_no_activity_entry(tmp_path):
+    wl = _watchlist(tmp_path)
+    _populate(wl, 5)
+    gauntlet = RecordingGauntlet()
+    judge = FixedJudge(accepted=True)
+    activity = RecordingActivity()
+
+    with patch("cerebral.trading.discovery._run_tally", return_value=(False, 0, 0)):
+        await process_idea(
+            _pattern_idea(), wl, gauntlet, judge_idea_fn=judge,
+            record_activity_fn=activity, candidate_limit=2,
+        )
+
+    tally_entries = [c for c in activity.calls if c[1].get("source") == "trading_tally"]
+    assert tally_entries == []
+
+
+# ── run_discovery_pass ────────────────────────────────────────────────────
+
+async def test_run_discovery_pass_processes_every_idea(tmp_path):
+    wl = _watchlist(tmp_path)
+    gauntlet = RecordingGauntlet()
+    judge = FixedJudge(accepted=True)
+    ideas = [_ticker_idea("AAPL"), _ticker_idea("TSLA")]
+
+    results = await run_discovery_pass(ideas, wl, gauntlet, judge_idea_fn=judge)
+
+    assert len(results) == 2
+    assert {c[1] for c in gauntlet.calls} == {"AAPL", "TSLA"}
+
+
+# ── VettedTickers (S28/#881) ──────────────────────────────────────────────
+
+def _vetted(tmp_path):
+    return VettedTickers(db_path=tmp_path / "vetted.db")
+
+
+def test_get_verdict_returns_none_for_a_never_vetted_symbol(tmp_path):
+    v = _vetted(tmp_path)
+    assert v.get_verdict("XYZ", "0001-24-000001") is None
+
+
+def test_get_verdict_returns_the_recorded_verdict_for_the_same_accession(tmp_path):
+    v = _vetted(tmp_path)
+    v.record("XYZ", "0001-24-000001", red_flagged=True)
+
+    assert v.get_verdict("XYZ", "0001-24-000001") is True
+
+
+def test_get_verdict_returns_none_for_a_different_accession(tmp_path):
+    """A new filing (different accession) must not reuse the old verdict --
+    this is the whole mechanism that makes a NEW filing re-trigger a scan."""
+    v = _vetted(tmp_path)
+    v.record("XYZ", "0001-24-000001", red_flagged=False)
+
+    assert v.get_verdict("XYZ", "0001-24-000002") is None
+
+
+def test_record_replaces_the_prior_verdict_for_the_same_symbol(tmp_path):
+    v = _vetted(tmp_path)
+    v.record("XYZ", "0001-24-000001", red_flagged=True)
+    v.record("XYZ", "0001-24-000002", red_flagged=False)
+
+    assert v.get_verdict("XYZ", "0001-24-000001") is None  # superseded
+    assert v.get_verdict("XYZ", "0001-24-000002") is False
+
+
+def test_vetted_tickers_are_independent_per_symbol(tmp_path):
+    v = _vetted(tmp_path)
+    v.record("XYZ", "0001-24-000001", red_flagged=True)
+    v.record("ABC", "0002-24-000001", red_flagged=False)
+
+    assert v.get_verdict("XYZ", "0001-24-000001") is True
+    assert v.get_verdict("ABC", "0002-24-000001") is False
+
+
+# ── DiscoveryAttempts (S30/#894) ───────────────────────────────────────────
+
+def _attempts(tmp_path):
+    return DiscoveryAttempts(db_path=tmp_path / "attempts.db")
+
+
+def test_get_latest_returns_none_for_a_never_attempted_symbol(tmp_path):
+    a = _attempts(tmp_path)
+    assert a.get_latest("XYZ") is None
+
+
+def test_record_then_get_latest_round_trips(tmp_path):
+    a = _attempts(tmp_path)
+    a.record("XYZ", "UNVALIDATED", reason="vs_benchmark: underperformed", idea_url="https://x")
+
+    latest = a.get_latest("XYZ")
+    assert latest["verdict"] == "UNVALIDATED"
+    assert latest["reason"] == "vs_benchmark: underperformed"
+    assert latest["idea_url"] == "https://x"
+
+
+def test_record_replaces_the_prior_attempt_for_the_same_symbol(tmp_path):
+    """One row per symbol -- only the MOST RECENT attempt matters, same as
+    VettedTickers' own replace-wholesale convention."""
+    a = _attempts(tmp_path)
+    a.record("XYZ", "UNVALIDATED", reason="first try")
+    a.record("XYZ", "VALIDATED", reason="")
+
+    assert a.get_latest("XYZ")["verdict"] == "VALIDATED"
+
+
+def test_attempts_are_independent_per_symbol(tmp_path):
+    a = _attempts(tmp_path)
+    a.record("XYZ", "UNVALIDATED", reason="noise gate")
+    a.record("ABC", "VALIDATED")
+
+    assert a.get_latest("XYZ")["verdict"] == "UNVALIDATED"
+    assert a.get_latest("ABC")["verdict"] == "VALIDATED"
+
+
+def test_get_source_performance_rollups_by_domain(tmp_path):
+    a = _attempts(tmp_path)
+    a.record("TICKER1", "VALIDATED", idea_url="https://fool.com/pick1")
+    a.record("TICKER2", "UNVALIDATED", idea_url="https://fool.com/pick2")
+    a.record("TICKER3", "VALIDATED", idea_url="https://benzinga.com/pick3")
+    a.record("TICKER4", "UNVALIDATED", idea_url="https://benzinga.com/pick4")
+    a.record("TICKER5", "UNVALIDATED", idea_url="https://marketwatch.com/pick5")
+    a.record("TICKER6", "VALIDATED", idea_url="")
+
+    perf = a.get_source_performance()
+
+    assert perf["fool.com"] == {"validated": 1, "unvalidated": 1, "total": 2}
+    assert perf["benzinga.com"] == {"validated": 1, "unvalidated": 1, "total": 2}
+    assert perf["marketwatch.com"] == {"validated": 0, "unvalidated": 1, "total": 1}
+    assert perf[""] == {"validated": 1, "unvalidated": 0, "total": 1}
+    assert len(perf) == 4
+
+
+# ── process_idea: per-attempt logging (S30/#894) ───────────────────────────
+
+async def test_ticker_specific_dispatch_records_the_attempt(tmp_path):
+    wl = _watchlist(tmp_path)
+    attempt = RecordingAttempt()
+
+    await process_idea(_ticker_idea("AAPL"), wl, RecordingGauntlet(), record_attempt_fn=attempt)
+
+    assert len(attempt.calls) == 1
+    assert attempt.calls[0]["symbol"] == "AAPL"
+    assert attempt.calls[0]["verdict"] == "VALIDATED"
+
+
+async def test_prefiltered_dispatch_records_an_attempt_per_candidate(tmp_path):
+    """One attempt recorded per prefiltered candidate -- not asserting the
+    exact 2 symbols (see test_accepted_pattern_idea_only_dispatches_the_
+    prefiltered_candidates for why the widening fix legitimately swaps
+    one of them at this watchlist-size/candidate_limit)."""
+    from cerebral.trading.discovery import _KNOWN_TICKERS
+    wl = _watchlist(tmp_path)
+    for sym in ["AAPL", "MSFT"]:
+        wl.upsert(sym)
+    attempt = RecordingAttempt()
+    judge = FixedJudge(accepted=True)
+
+    await process_idea(_pattern_idea(), wl, RecordingGauntlet(), judge_idea_fn=judge,
+                        record_attempt_fn=attempt, candidate_limit=2)
+
+    symbols = {c["symbol"] for c in attempt.calls}
+    assert len(symbols) == 2
+    assert symbols <= _KNOWN_TICKERS
+
+
+async def test_unvalidated_dispatch_records_the_failed_gates_reason(tmp_path):
+    wl = _watchlist(tmp_path)
+    attempt = RecordingAttempt()
+
+    await process_idea(_ticker_idea("AAPL"), wl, UnvalidatedGauntlet(), record_attempt_fn=attempt)
+
+    assert attempt.calls[0]["verdict"] == "UNVALIDATED"
+    assert attempt.calls[0]["reason"] == "vs_benchmark: underperformed by 3.2%"
+
+
+async def test_rejected_pattern_idea_never_records_an_attempt(tmp_path):
+    """No candidate ticker was ever chosen -- nothing to key an attempt on,
+    same reasoning as #894's issue scope note."""
+    wl = _watchlist(tmp_path)
+    attempt = RecordingAttempt()
+    judge = FixedJudge(accepted=False, reason="too vague")
+
+    await process_idea(_pattern_idea(), wl, RecordingGauntlet(), judge_idea_fn=judge,
+                        record_attempt_fn=attempt)
+
+    assert attempt.calls == []
+
+
+async def test_no_record_attempt_fn_is_a_silent_no_op(tmp_path):
+    """Default None must not raise -- matches record_activity_fn's own
+    optional convention."""
+    wl = _watchlist(tmp_path)
+    results = await process_idea(_ticker_idea("AAPL"), wl, RecordingGauntlet())
+    assert len(results) == 1
+
+
+# ── rank_for_day_trading ─────────────────────────────────────────────────
+
+def _bars(price: float, dollar_range_pct: float, volume: float, days: int = 25):
+    """A synthetic daily-bars DataFrame with a fixed close, a fixed
+    high-low range as a % of close, and a fixed volume every day --
+    enough to drive rank_for_day_trading's liquidity/volatility scoring
+    without touching real yfinance data."""
+    import pandas as pd
+    half_range = price * dollar_range_pct / 2
+    return pd.DataFrame({
+        "Open": [price] * days,
+        "High": [price + half_range] * days,
+        "Low": [price - half_range] * days,
+        "Close": [price] * days,
+        "Volume": [volume] * days,
+    })
+
+
+def test_rank_for_day_trading_orders_by_volatility_among_liquid_symbols():
+    from cerebral.trading.discovery import rank_for_day_trading
+    bars = {
+        "CALM": _bars(price=100, dollar_range_pct=0.01, volume=1_000_000),   # $100M/day, low range
+        "WILD": _bars(price=100, dollar_range_pct=0.08, volume=1_000_000),   # $100M/day, high range
+    }
+
+    ranked = rank_for_day_trading(list(bars), lambda sym, *a, **kw: bars[sym])
+
+    assert ranked == ["WILD", "CALM"]
+
+
+def test_rank_for_day_trading_drops_illiquid_symbols_outright():
+    from cerebral.trading.discovery import rank_for_day_trading
+    bars = {
+        "THIN": _bars(price=100, dollar_range_pct=0.20, volume=1_000),  # huge range, $100K/day -- illiquid
+        "SOLID": _bars(price=100, dollar_range_pct=0.02, volume=1_000_000),
+    }
+
+    ranked = rank_for_day_trading(list(bars), lambda sym, *a, **kw: bars[sym])
+
+    assert ranked == ["SOLID"]
+
+
+def test_rank_for_day_trading_drops_penny_stocks_below_min_price():
+    """#1002: min_price lowered 5.0 -> 1.0 so real, liquid cheap tickers
+    (PARA ~$1.10, PLUG ~$2.16, etc.) aren't silently dropped -- $1.50 used
+    to be below the floor and is now legitimately rankable. The floor
+    itself still needs to drop something below IT (now $1.00, not $5.00)."""
+    from cerebral.trading.discovery import rank_for_day_trading
+    bars = {"PENNY": _bars(price=0.50, dollar_range_pct=0.20, volume=10_000_000)}
+
+    ranked = rank_for_day_trading(list(bars), lambda sym, *a, **kw: bars[sym])
+
+    assert ranked == []
+
+
+def test_rank_for_day_trading_keeps_liquid_stocks_above_the_new_lower_floor():
+    """A real gap this audit found: the OLD $5.00 floor silently dropped
+    every cheap ticker added to _KNOWN_TICKERS the same day (PARA, PLUG,
+    BBD, GRAB, NIO -- all under $5) despite clearing the real liquidity
+    test (min_dollar_volume) comfortably. $1.50, high volume, must now be
+    ranked, not dropped."""
+    from cerebral.trading.discovery import rank_for_day_trading
+    bars = {"CHEAP": _bars(price=1.5, dollar_range_pct=0.20, volume=10_000_000)}
+
+    ranked = rank_for_day_trading(list(bars), lambda sym, *a, **kw: bars[sym])
+
+    assert ranked == ["CHEAP"]
+
+
+def test_rank_for_day_trading_skips_symbols_whose_fetch_fails():
+    from cerebral.trading.discovery import rank_for_day_trading
+
+    def flaky_fetch(symbol, *a, **kw):
+        if symbol == "BROKEN":
+            raise RuntimeError("network down")
+        return _bars(price=50, dollar_range_pct=0.03, volume=1_000_000)
+
+    ranked = rank_for_day_trading(["BROKEN", "OK"], flaky_fetch)
+
+    assert ranked == ["OK"]
+
+
+def test_prefilter_candidates_uses_rank_fn_when_given(tmp_path):
+    """rank_fn (day-trade fitness) beats plain recency ordering when
+    supplied -- the whole point of adding it."""
+    wl = _watchlist(tmp_path)
+    for sym in ["AAPL", "MSFT", "TSLA"]:
+        wl.upsert(sym)
+
+    ranked_order = ["TSLA", "AAPL", "MSFT"]
+    candidates = wl.prefilter_candidates(
+        _pattern_idea(), limit=2, rank_fn=lambda symbols: ranked_order,
+    )
+
+    assert candidates == ["TSLA", "AAPL"]
+
+
+def test_prefilter_candidates_falls_back_to_universe_if_rank_fn_returns_nothing(tmp_path):
+    """Every candidate failing its liquidity floor shouldn't mean zero
+    candidates to try -- fall back to the unranked universe (watchlist
+    entries first, known-liquid overflow after)."""
+    wl = _watchlist(tmp_path)
+    wl.upsert("AAPL")
+
+    candidates = wl.prefilter_candidates(_pattern_idea(), limit=2, rank_fn=lambda symbols: [])
+
+    assert candidates[0] == "AAPL"
+    assert len(candidates) == 2
+
+def test_rank_for_day_trading_allows_sub_five_prices_with_default_min_price():
+    """A sub-$5 liquid ticker should pass the default price floor once
+    it's lowered to $1.0 instead of $5.0."""
+    from cerebral.trading.discovery import rank_for_day_trading
+    bars = {"CHEAP": _bars(price=2.50, dollar_range_pct=0.10, volume=10_000_000)}
+
+    ranked = rank_for_day_trading(list(bars), lambda sym, *a, **kw: bars[sym])
+
+    assert ranked == ["CHEAP"]
+
+
+def _fake_broker(movers_data, actives_data, all_assets_data, raise_on_call=False):
+    class Broker:
+        def get_market_movers(self, top=15):
+            if raise_on_call:
+                raise ConnectionError("network down")
+            return movers_data
+        def get_most_actives(self, top=10):
+            if raise_on_call:
+                raise ConnectionError("network down")
+            return actives_data
+        def get_all_assets(self):
+            if raise_on_call:
+                raise ConnectionError("network down")
+            return all_assets_data
+    return Broker()
+
+
+def test_build_dynamic_universe_includes_movers_actives_ranked():
+    """Gainers, losers, actives, and random sample should all appear in the
+    ranked output when they pass the liquidity/volatility filters."""
+    from cerebral.trading.discovery import build_dynamic_universe
+    from cerebral.trading.discovery import _KNOWN_TICKERS
+    
+    def fetch_ohlcv(sym, *a, **kw):
+        return _bars(price=50.0, dollar_range_pct=0.03, volume=10_000_000)
+        
+    broker = _fake_broker(
+        movers_data={"gainers": [{"symbol": "G1"}, {"symbol": "G2"}], "losers": [{"symbol": "L1"}]},
+        actives_data=[{"symbol": "A1"}, {"symbol": "A2"}],
+        all_assets_data=["R1", "R2", "R3"],
+    )
+    
+    ranked = build_dynamic_universe(broker, fetch_ohlcv, random_sample_size=2)
+    
+    # Movers/actives must pass the filter and appear in the ranked list
+    assert all(sym in ranked for sym in ["G1", "G2", "L1", "A1", "A2"])
+    # rank_for_day_trading returns them sorted by volatility; all have same here, so alphabetical
+    assert ranked == sorted(ranked)
+    # The random sample adds at least one from remaining
+    assert len(ranked) >= 5
+
+
+def test_build_dynamic_universe_falls_back_on_broker_exception():
+    """If the broker calls raise, it must return exactly sorted(_KNOWN_TICKERS)."""
+    from cerebral.trading.discovery import build_dynamic_universe
+    from cerebral.trading.discovery import _KNOWN_TICKERS
+    
+    broker = _fake_broker({}, [], [], raise_on_call=True)
+    ranked = build_dynamic_universe(broker, lambda *a, **kw: None)
+    
+    assert ranked == sorted(_KNOWN_TICKERS)
+
+
+def test_build_dynamic_universe_falls_back_on_empty_ranked_result():
+    """If all candidates fail the liquidity/ATR filter, rank_for_day_trading
+    returns [], so build_dynamic_universe must fall back to sorted(_KNOWN_TICKERS)."""
+    from cerebral.trading.discovery import build_dynamic_universe
+    from cerebral.trading.discovery import _KNOWN_TICKERS
+    
+    broker = _fake_broker(
+        movers_data={"gainers": [], "losers": []},
+        actives_data=[],
+        all_assets_data=["T1", "T2"],
+    )
+    # Fetch function that returns empty/None data so rank_for_day_trading skips them
+    ranked = build_dynamic_universe(broker, lambda *a, **kw: None)
+    
+    assert ranked == sorted(_KNOWN_TICKERS)

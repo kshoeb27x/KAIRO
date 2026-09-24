@@ -1,0 +1,1152 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+// src/companion/settings.rs
+//! SQLite storage for per-user companion-mode settings.
+//!
+//! One row per user. The settings DB is global (single file at
+//! `<data_dir>/companion.db`) rather than per-user because the scheduler
+//! needs to scan "which users have companion enabled" on
+//! every tick. Per-user SQLite would force the scheduler to enumerate
+//! every wiki dir on every tick — wasteful.
+//!
+//! Wiki pages still carry the *content* (persona, learned routines,
+//! safety contacts); this DB carries only the operational flags + the
+//! hot-path safety contact for v1.
+
+use std::path::Path;
+use std::sync::Mutex;
+
+use chrono::{DateTime, Utc};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
+
+use crate::companion::Result;
+
+// Per-user overrides for the global check-in cadence knobs
+// (`companion.*` in mira_config.json). `None` on a field means "inherit
+// the instance default"; the scheduler falls back to the global value.
+// Stored as JSON in `cadence_json` so adding a knob needs no new column.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CompanionCadence {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_unanswered_checkins: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_per_day: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_gap_minutes: Option<i64>,
+}
+
+// ── Presence (rhythm + personality) tuning ─────────────────────────────────
+//
+// The "Presence" feature set: how MIRA reaches out (rhythm) and how it sounds
+// (personality). Stored as JSON in `presence_json` so new knobs need no schema
+// change (mirrors `cadence`). Pass 1 = friend/rhythm/tone; the care-net lands
+// in a later pass.
+
+/// How proactive sends are timed. `Fuzzy` = a daily band placed at varied,
+/// non-deterministic times (the "friend, not an alarm clock" model — the
+/// default). `Scheduled` = fire at specific local clock times.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FrequencyMode {
+    #[default]
+    Fuzzy,
+    Scheduled,
+}
+
+/// Personality sliders, each `0..=100` (50 = neutral). The Presence page also
+/// offers preset buttons that just set these to fixed levels.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ToneAxes {
+    pub warmth:      u8,
+    pub playfulness: u8,
+    pub verbosity:   u8,
+}
+impl Default for ToneAxes {
+    fn default() -> Self { Self { warmth: 50, playfulness: 50, verbosity: 50 } }
+}
+
+/// Which kinds of proactive message MIRA may send. The dispatcher weights
+/// across the enabled set per send (and biases by context). Jokes default OFF
+/// (opt-in humour); the rest default on.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct MessageMix {
+    pub check_in:      bool,
+    pub joke:          bool,
+    pub status_update: bool,
+    pub follow_up:     bool,
+    pub share:         bool,
+    pub encouragement: bool,
+}
+impl Default for MessageMix {
+    fn default() -> Self {
+        Self { check_in: true, joke: false, status_update: true,
+               follow_up: true, share: true, encouragement: true }
+    }
+}
+
+fn default_min_per_day() -> u32 { 1 }
+fn default_true() -> bool { true }
+
+/// Per-user Presence tuning. Empty JSON (`{}`) deserialises to all defaults.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PresenceTuning {
+    #[serde(default)]
+    pub frequency_mode: FrequencyMode,
+    /// Fuzzy-mode lower bound (messages per user-local day). The upper bound
+    /// is `cadence.max_per_day` (which falls back to the global cap when None).
+    #[serde(default = "default_min_per_day")]
+    pub min_per_day: u32,
+    /// `Scheduled`-mode local times, `"HH:MM"`. Ignored in `Fuzzy` mode.
+    #[serde(default)]
+    pub scheduled_times: Vec<String>,
+    #[serde(default)]
+    pub tone: ToneAxes,
+    #[serde(default)]
+    pub message_mix: MessageMix,
+    /// Include "here's what I've been up to" updates drawn from MIRA's
+    /// autonomous agents / automations.
+    #[serde(default = "default_true")]
+    pub share_agent_activity: bool,
+}
+impl Default for PresenceTuning {
+    fn default() -> Self {
+        Self {
+            frequency_mode:       FrequencyMode::default(),
+            min_per_day:          default_min_per_day(),
+            scheduled_times:      Vec::new(),
+            tone:                 ToneAxes::default(),
+            message_mix:          MessageMix::default(),
+            share_agent_activity: true,
+        }
+    }
+}
+
+// ── Care-net (Presence Pass 2) ─────────────────────────────────────────────
+//
+// The wellbeing/safety layer. The companion already escalates distress + missed
+// check-ins to `safety_contact_user_id` (see safety.rs); the care-net adds the
+// *who is this person* context that tunes how sensitively MIRA watches and how
+// it talks — plus the transparency record that the arrangement was disclosed.
+// Stored as JSON in `carenet_json` so it stays extensible (mirrors cadence /
+// presence). Guardrails: never covert (always disclosed), concern-not-tattling
+// (severity-gated escalation lives in safety.rs), minimal disclosure.
+
+/// Who the monitored person is, which tunes escalation sensitivity + tone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CareRole {
+    /// Ordinary adult — self-managed companion; only clear distress or a run of
+    /// missed check-ins escalates. The default.
+    #[default]
+    Standard,
+    /// A child/teen. A guardian is the safety contact; MIRA keeps a gentle,
+    /// age-aware tone, surfaces age-appropriate support, and is more willing to
+    /// give the guardian a heads-up on an elevated concern.
+    Child,
+    /// An older adult living more independently. Silence (missed check-ins) and
+    /// confused/erratic replies are weighted more heavily toward a heads-up to
+    /// the responsible contact.
+    Elder,
+    /// An adult who wants someone looking out for them — recovery, a chronic
+    /// condition, living alone, a hard stretch. Monitored like child/elder (a
+    /// care contact is alerted on distress/silence and, once the person has
+    /// consented, can see their wellbeing summary) but with no age framing and a
+    /// peer, non-paternalistic tone.
+    Adult,
+}
+
+impl CareRole {
+    /// True when this role means someone else is watching over the person, so
+    /// MIRA should disclose the arrangement and apply care-net escalation.
+    pub fn is_monitored(&self) -> bool { !matches!(self, CareRole::Standard) }
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CareRole::Standard => "standard",
+            CareRole::Child    => "child",
+            CareRole::Elder    => "elder",
+            CareRole::Adult    => "adult",
+        }
+    }
+}
+
+/// Per-user care-net configuration. Empty JSON (`{}`) → Standard, no consent
+/// stamp (the common case: companion with no care arrangement).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CareNet {
+    #[serde(default)]
+    pub role: CareRole,
+    /// When the care arrangement was disclosed to + acknowledged by the
+    /// monitored person (or asserted by their guardian at setup). MIRA ALWAYS
+    /// discloses the arrangement before it would escalate — `None` means "not
+    /// yet disclosed/acknowledged", which the dispatcher uses to surface a
+    /// one-time, plain-language heads-up. Never covert.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent_at: Option<DateTime<Utc>>,
+    /// Additional guardian user ids beyond the primary `safety_contact_user_id`
+    /// — a ward can have more than one guardian (e.g. both parents),
+    /// all notified on a distress/missed-check-in escalation. The primary
+    /// contact stays in `safety_contact_user_id` for back-compat; this is the
+    /// extra set. Stored in `carenet_json` (no migration). See
+    /// `companion::governance::guardians_of`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guardian_ids: Vec<String>,
+}
+
+// Per-user companion-mode state. JSON fields (`quiet_hours`,
+// `preferred_channels`) are stored as text and parsed on read.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompanionSettings {
+    pub user_id: String,
+    pub enabled: bool,
+    // Epoch ms; `None` means not paused. `enabled && paused_until > now`
+    // is the "paused" state — set `paused_until = None` (or past time) to
+    // resume.
+    pub paused_until: Option<DateTime<Utc>>,
+    // Pairs of "HH:MM"–"HH:MM" strings, interpreted in the user's tz.
+    // Empty = no quiet hours; the scheduler treats anything missing as
+    // "always OK".
+    pub quiet_hours: Vec<(String, String)>,
+    // Ordered preference list. e.g. `["signal","telegram","web"]`. The
+    // scheduler picks the first reachable one.
+    pub preferred_channels: Vec<String>,
+ // For v1 this is a single user id; v2 swaps in a group id.
+    // `None` while waiting for setup.
+    pub safety_contact_user_id: Option<String>,
+    // Epoch ms when the minimum bootstrap completed. `None` = setup not
+    // done yet; the chit-chat detector / engagement assessor stay off
+    // until this is stamped.
+    pub setup_completed_at: Option<DateTime<Utc>>,
+    // Last time the scheduler fired a check-in for this user.
+    // `None` = never fired. Used by the policy to enforce `min_gap`
+    // and `daily_cap`.
+    pub last_checkin_at: Option<DateTime<Utc>>,
+    // consecutive check-ins fired since the user last
+    // sent a message. Incremented by the scheduler after each fire;
+    // reset to 0 by the chat handler on any user message. The
+    // safety floor watches this for "user hasn't replied in a
+    // while" → soft escalation.
+    pub consecutive_missed_checkins: u32,
+    // Q1.6 — daily-briefing toggle. Off by default per the design
+    // (existing companion users shouldn't get surprised by a new
+    // daily message they didn't ask for). When true, the scheduler
+    // fires a structured briefing at `daily_briefing_hour` local
+    // time each day, separate from the warm-opener check-ins.
+    pub daily_briefing_enabled: bool,
+    // Hour of day (0-23) in the user's local tz when the daily
+    // briefing fires. Default 7 = 07:00 local. Honoured even when
+    // quiet_hours covers the same window (the briefing is opt-in
+    // content, not noise).
+    pub daily_briefing_hour: u8,
+    // Last time the scheduler fired a daily briefing for this user.
+    // Used by the briefing pass to enforce one-per-local-day.
+    pub last_briefing_at: Option<DateTime<Utc>>,
+    // Per-user overrides for the global check-in cadence knobs. Empty
+    // (all None) = inherit the instance defaults. Set via
+    // `companion_configure`.
+    #[serde(default)]
+    pub cadence: CompanionCadence,
+    // Presence (rhythm + personality) tuning. Empty JSON = all defaults.
+    #[serde(default)]
+    pub presence: PresenceTuning,
+    // Care-net (Pass 2): care role + consent/disclosure. Empty JSON =
+    // Standard, no arrangement. See [`CareNet`].
+    #[serde(default)]
+    pub care: CareNet,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl CompanionSettings {
+    /// A fresh settings row for `user_id` with safe, inert defaults (disabled,
+    /// no contact, `Standard` care role). Callers set the fields they need, then
+    /// `CompanionStore::upsert`.
+    pub fn new(user_id: &str) -> Self {
+        let now = Utc::now();
+        Self {
+            user_id: user_id.to_string(),
+            enabled: false,
+            paused_until: None,
+            quiet_hours: vec![],
+            preferred_channels: vec![],
+            safety_contact_user_id: None,
+            setup_completed_at: None,
+            last_checkin_at: None,
+            consecutive_missed_checkins: 0,
+            daily_briefing_enabled: false,
+            daily_briefing_hour: 7,
+            last_briefing_at: None,
+            cadence: CompanionCadence::default(),
+            presence: PresenceTuning::default(),
+            care: CareNet::default(),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    // Convenience: is the user currently in the "enabled and not
+    // paused" state? Returns false when setup isn't done — even an
+    // enabled-but-unconfigured account should not have hooks fire.
+    pub fn is_active(&self, now: DateTime<Utc>) -> bool {
+        if !self.enabled { return false; }
+        if self.setup_completed_at.is_none() { return false; }
+        match self.paused_until {
+            Some(until) => until <= now,
+            None => true,
+        }
+    }
+}
+
+/// An app entity bound to a family member (Slice 5 / family-domain infra).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OwnedEntity {
+    pub app_id:    String,
+    pub entity_id: String,
+    pub label:     Option<String>,
+}
+
+/// An ownership binding incl. the owning member (admin view).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntityOwnership {
+    pub app_id:    String,
+    pub entity_id: String,
+    pub user_id:   String,
+    pub label:     Option<String>,
+}
+
+pub struct CompanionStore {
+    conn: Mutex<Connection>,
+}
+
+impl CompanionStore {
+    pub fn open(path: &Path) -> Result<Self> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let conn = Connection::open(path)?;
+        Self::init_schema(&conn)?;
+        Ok(Self { conn: Mutex::new(conn) })
+    }
+
+    fn init_schema(conn: &Connection) -> Result<()> {
+        // Step 1 — fresh-DB schema (covers all known columns).
+        conn.execute_batch(r#"
+            CREATE TABLE IF NOT EXISTS companion_settings (
+                user_id                       TEXT PRIMARY KEY,
+                enabled                       INTEGER NOT NULL DEFAULT 0,
+                paused_until                  INTEGER,
+                quiet_hours_json              TEXT NOT NULL DEFAULT '[]',
+                preferred_channels_json       TEXT NOT NULL DEFAULT '[]',
+                safety_contact_user_id        TEXT,
+                setup_completed_at            INTEGER,
+                last_checkin_at               INTEGER,
+                consecutive_missed_checkins   INTEGER NOT NULL DEFAULT 0,
+                daily_briefing_enabled        INTEGER NOT NULL DEFAULT 0,
+                daily_briefing_hour           INTEGER NOT NULL DEFAULT 7,
+                last_briefing_at              INTEGER,
+                checkins_today_count          INTEGER NOT NULL DEFAULT 0,
+                checkins_today_day            TEXT,
+                cadence_json                  TEXT NOT NULL DEFAULT '{}',
+                presence_json                 TEXT NOT NULL DEFAULT '{}',
+                carenet_json                  TEXT NOT NULL DEFAULT '{}',
+                created_at                    INTEGER NOT NULL,
+                updated_at                    INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_companion_enabled
+                ON companion_settings(enabled, paused_until);
+
+            -- Generic member↔device ownership (Slice 5 / family-domain infra):
+            -- which app entity belongs to which family member, so a per-member
+            -- protective action (e.g. pause a ward's device via Home Assistant)
+            -- routes approval to that member's guardians. App-agnostic — the
+            -- security/health apps reuse the same binding. An entity has one
+            -- owner (PK on app_id+entity_id).
+            CREATE TABLE IF NOT EXISTS entity_ownership (
+                app_id     TEXT NOT NULL,
+                entity_id  TEXT NOT NULL,
+                user_id    TEXT NOT NULL,
+                label      TEXT,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (app_id, entity_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_entity_ownership_user
+                ON entity_ownership(user_id);
+        "#)?;
+        // Step 2 — idempotent column adds for DBs created by earlier
+        // slices. SQLite returns "duplicate column name" when the
+        // column already exists; swallow that and surface real
+        // failures.
+        let add = |sql: &str| -> Result<()> {
+            match conn.execute(sql, []) {
+                Ok(_) => Ok(()),
+                Err(rusqlite::Error::SqliteFailure(_, Some(ref msg)))
+                    if msg.contains("duplicate column") => Ok(()),
+                Err(e) => Err(e.into()),
+            }
+        };
+        add("ALTER TABLE companion_settings ADD COLUMN last_checkin_at INTEGER")?;
+        add("ALTER TABLE companion_settings \
+             ADD COLUMN consecutive_missed_checkins INTEGER NOT NULL DEFAULT 0")?;
+        // Q1.6 — daily-briefing columns. Off by default; existing
+        // rows get briefing_enabled=0 / hour=7 implicitly via the
+        // column defaults.
+        add("ALTER TABLE companion_settings \
+             ADD COLUMN daily_briefing_enabled INTEGER NOT NULL DEFAULT 0")?;
+        add("ALTER TABLE companion_settings \
+             ADD COLUMN daily_briefing_hour INTEGER NOT NULL DEFAULT 7")?;
+        add("ALTER TABLE companion_settings ADD COLUMN last_briefing_at INTEGER")?;
+        // 0.270.0 — real per-day check-in counter (the policy's `max_per_day`
+        // cap was previously fed a 0-or-1 approximation). `checkins_today_day`
+        // holds the user-local date ("YYYY-MM-DD") the count applies to; the
+        // count rolls over when the local day changes.
+        add("ALTER TABLE companion_settings \
+             ADD COLUMN checkins_today_count INTEGER NOT NULL DEFAULT 0")?;
+        add("ALTER TABLE companion_settings ADD COLUMN checkins_today_day TEXT")?;
+        // 0.271.0 — per-user cadence overrides (JSON: max_unanswered_checkins,
+        // max_per_day, min_gap_minutes). Empty '{}' = inherit global defaults.
+        add("ALTER TABLE companion_settings \
+             ADD COLUMN cadence_json TEXT NOT NULL DEFAULT '{}'")?;
+        // 0.276.0 — Presence tuning (JSON: frequency_mode, min_per_day,
+        // scheduled_times, tone axes, message_mix, share_agent_activity).
+        // Empty '{}' = all defaults.
+        add("ALTER TABLE companion_settings \
+             ADD COLUMN presence_json TEXT NOT NULL DEFAULT '{}'")?;
+        // 0.278.0 — Presence Pass 2 care-net (JSON: role, consent_at).
+        // Empty '{}' = Standard role, no care arrangement.
+        add("ALTER TABLE companion_settings \
+             ADD COLUMN carenet_json TEXT NOT NULL DEFAULT '{}'")?;
+        Ok(())
+    }
+
+    // Real count of check-ins fired so far on the user-local day `day`
+    // ("YYYY-MM-DD"). Returns 0 when the stored counter is for a different
+    // day (i.e. the day has rolled over) or the user has no row yet. Scheduler-
+    // owned; feeds the policy's `max_per_day` cap.
+    pub fn checkins_today(&self, user_id: &str, day: &str) -> Result<u32> {
+        let conn = self.conn.lock().expect("companion store poisoned");
+        let count: i64 = conn.query_row(
+            "SELECT CASE WHEN checkins_today_day = ?2 THEN checkins_today_count ELSE 0 END
+             FROM companion_settings WHERE user_id = ?1",
+            params![user_id, day],
+            |row| row.get(0),
+        ).optional()?.unwrap_or(0);
+        Ok(count.max(0) as u32)
+    }
+
+    // Record a check-in fired on the user-local day `day`, returning the new
+    // count. Atomic read-modify-write: increments when the stored day matches,
+    // otherwise resets to 1 and stamps the new day (local-day rollover).
+    pub fn bump_checkins_today(&self, user_id: &str, day: &str) -> Result<u32> {
+        let conn = self.conn.lock().expect("companion store poisoned");
+        conn.execute(
+            "UPDATE companion_settings
+             SET checkins_today_count =
+                   CASE WHEN checkins_today_day = ?1 THEN checkins_today_count + 1 ELSE 1 END,
+                 checkins_today_day = ?1,
+                 updated_at = ?2
+             WHERE user_id = ?3",
+            params![day, Utc::now().timestamp_millis(), user_id],
+        )?;
+        let count: i64 = conn.query_row(
+            "SELECT checkins_today_count FROM companion_settings WHERE user_id = ?1",
+            params![user_id],
+            |row| row.get(0),
+        ).unwrap_or(0);
+        Ok(count.max(0) as u32)
+    }
+
+    // Fetch settings for `user_id`. Returns `Ok(None)` if no row.
+    pub fn get(&self, user_id: &str) -> Result<Option<CompanionSettings>> {
+        let conn = self.conn.lock().expect("companion store poisoned");
+        let row: Option<CompanionSettings> = conn.query_row(
+            "SELECT user_id, enabled, paused_until,
+                    quiet_hours_json, preferred_channels_json,
+                    safety_contact_user_id, setup_completed_at,
+                    last_checkin_at, consecutive_missed_checkins,
+                    daily_briefing_enabled, daily_briefing_hour, last_briefing_at,
+                    created_at, updated_at, cadence_json, presence_json, carenet_json
+             FROM companion_settings WHERE user_id = ?1",
+            params![user_id],
+            row_to_settings,
+        ).optional()?;
+        Ok(row)
+    }
+
+    // Upsert. Used by `enable` / `configure` / `pause` / `resume`.
+    // `created_at` is only set when the row is new; otherwise preserved.
+    // **Note:** `last_checkin_at` and `consecutive_missed_checkins`
+    // are intentionally NOT in the upsert path — they're scheduler-
+    // owned columns updated by targeted helpers
+    // (`mark_checkin` / `increment_missed` / `reset_missed`) so a
+    // configure call can't accidentally clear them.
+    pub fn upsert(&self, s: &CompanionSettings) -> Result<()> {
+        let quiet_json = serde_json::to_string(&s.quiet_hours)?;
+        let chan_json  = serde_json::to_string(&s.preferred_channels)?;
+        let cadence_json = serde_json::to_string(&s.cadence)?;
+        let presence_json = serde_json::to_string(&s.presence)?;
+        let carenet_json = serde_json::to_string(&s.care)?;
+        let conn = self.conn.lock().expect("companion store poisoned");
+        conn.execute(
+            "INSERT INTO companion_settings (
+                user_id, enabled, paused_until,
+                quiet_hours_json, preferred_channels_json,
+                safety_contact_user_id, setup_completed_at,
+                last_checkin_at, consecutive_missed_checkins,
+                daily_briefing_enabled, daily_briefing_hour,
+                cadence_json, presence_json, carenet_json,
+                created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+             ON CONFLICT(user_id) DO UPDATE SET
+                enabled                 = excluded.enabled,
+                paused_until            = excluded.paused_until,
+                quiet_hours_json        = excluded.quiet_hours_json,
+                preferred_channels_json = excluded.preferred_channels_json,
+                safety_contact_user_id  = excluded.safety_contact_user_id,
+                setup_completed_at      = excluded.setup_completed_at,
+                daily_briefing_enabled  = excluded.daily_briefing_enabled,
+                daily_briefing_hour     = excluded.daily_briefing_hour,
+                cadence_json            = excluded.cadence_json,
+                presence_json           = excluded.presence_json,
+                carenet_json            = excluded.carenet_json,
+                updated_at              = excluded.updated_at",
+            params![
+                s.user_id,
+                if s.enabled { 1i64 } else { 0i64 },
+                s.paused_until.map(|d| d.timestamp_millis()),
+                quiet_json,
+                chan_json,
+                s.safety_contact_user_id,
+                s.setup_completed_at.map(|d| d.timestamp_millis()),
+                s.last_checkin_at.map(|d| d.timestamp_millis()),
+                s.consecutive_missed_checkins as i64,
+                if s.daily_briefing_enabled { 1i64 } else { 0i64 },
+                s.daily_briefing_hour as i64,
+                cadence_json,
+                presence_json,
+                carenet_json,
+                s.created_at.timestamp_millis(),
+                s.updated_at.timestamp_millis(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    // Q1.6 — stamp `last_briefing_at` for `user_id`. Targeted update
+    // so the scheduler's briefing pass doesn't race with the
+    // check-in / configure paths; only the column it owns gets
+    // touched. Mirrors `mark_checkin`.
+    pub fn mark_briefing(&self, user_id: &str, at: DateTime<Utc>) -> Result<()> {
+        let conn = self.conn.lock().expect("companion store poisoned");
+        conn.execute(
+            "UPDATE companion_settings
+             SET last_briefing_at = ?1, updated_at = ?2
+             WHERE user_id = ?3",
+            params![at.timestamp_millis(), Utc::now().timestamp_millis(), user_id],
+        )?;
+        Ok(())
+    }
+
+    // Stamp the care-net disclosure as done (sets `care.consent_at` to now via a
+    // read-modify-write of the carenet JSON blob). Called by the dispatcher
+    // after it weaves the one-time "you're being looked out for" heads-up into a
+    // check-in, so it happens exactly once. No-op if the user has no row.
+    pub fn mark_care_disclosed(&self, user_id: &str) -> Result<()> {
+        let Some(mut s) = self.get(user_id)? else { return Ok(()); };
+        if s.care.consent_at.is_some() { return Ok(()); }
+        s.care.consent_at = Some(Utc::now());
+        s.updated_at = Utc::now();
+        self.upsert(&s)
+    }
+
+    // Stamp `last_checkin_at` for `user_id` to `at`. Targeted update so
+    // the scheduler doesn't race with other writers; only the column
+    // it owns gets touched.
+    pub fn mark_checkin(&self, user_id: &str, at: DateTime<Utc>) -> Result<()> {
+        let conn = self.conn.lock().expect("companion store poisoned");
+        conn.execute(
+            "UPDATE companion_settings
+             SET last_checkin_at = ?1, updated_at = ?2
+             WHERE user_id = ?3",
+            params![at.timestamp_millis(), Utc::now().timestamp_millis(), user_id],
+        )?;
+        Ok(())
+    }
+
+    // Increment `consecutive_missed_checkins` by 1 (atomic). Called
+    // by the scheduler after a fire that completed delivery but
+    // before the user has had a chance to respond. The next user
+    // message resets this via [`Self::reset_missed_checkins`].
+    pub fn increment_missed_checkins(&self, user_id: &str) -> Result<u32> {
+        let conn = self.conn.lock().expect("companion store poisoned");
+        let now = Utc::now().timestamp_millis();
+        conn.execute(
+            "UPDATE companion_settings
+             SET consecutive_missed_checkins = consecutive_missed_checkins + 1,
+                 updated_at = ?1
+             WHERE user_id = ?2",
+            params![now, user_id],
+        )?;
+        // Read back so callers can act on the new value.
+        let count: i64 = conn.query_row(
+            "SELECT consecutive_missed_checkins
+             FROM companion_settings WHERE user_id = ?1",
+            params![user_id],
+            |row| row.get(0),
+        ).unwrap_or(0);
+        Ok(count as u32)
+    }
+
+    // Reset `consecutive_missed_checkins` to 0. Called by the chat
+    // handler when the user sends any message — proves the
+    // scheduler's previous check-ins were received.
+    pub fn reset_missed_checkins(&self, user_id: &str) -> Result<()> {
+        let conn = self.conn.lock().expect("companion store poisoned");
+        conn.execute(
+            "UPDATE companion_settings
+             SET consecutive_missed_checkins = 0, updated_at = ?1
+             WHERE user_id = ?2",
+            params![Utc::now().timestamp_millis(), user_id],
+        )?;
+        Ok(())
+    }
+
+    /// Users who have `guardian_id` as a guardian — their primary safety
+    /// contact **or** an additional guardian (`CareNet::guardian_ids`). The
+    /// reverse of [`crate::companion::governance::guardians_of`]. A full scan
+    /// that parses `carenet_json` for the extra guardians; fine at family scale.
+    pub fn wards_of(&self, guardian_id: &str) -> Result<Vec<String>> {
+        let conn = self.conn.lock().expect("companion store poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT user_id, safety_contact_user_id, carenet_json FROM companion_settings",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (user_id, primary, carenet) = row?;
+            if primary.as_deref() == Some(guardian_id) {
+                out.push(user_id);
+                continue;
+            }
+            if let Ok(care) = serde_json::from_str::<CareNet>(&carenet) {
+                if care.guardian_ids.iter().any(|g| g == guardian_id) {
+                    out.push(user_id);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    // ── Member↔device ownership (Slice 5 / family-domain infra) ──────────────
+
+    /// Bind `entity_id` (belonging to app `app_id`) to family member `user_id`,
+    /// with an optional human `label`. Upsert — re-binding replaces the owner.
+    pub fn set_entity_owner(
+        &self, app_id: &str, entity_id: &str, user_id: &str, label: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().expect("companion store poisoned");
+        conn.execute(
+            "INSERT INTO entity_ownership (app_id, entity_id, user_id, label, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(app_id, entity_id) DO UPDATE SET
+                 user_id = excluded.user_id, label = excluded.label",
+            params![app_id, entity_id, user_id, label, Utc::now().timestamp_millis()],
+        )?;
+        Ok(())
+    }
+
+    /// Remove the ownership binding for `(app_id, entity_id)`.
+    pub fn remove_entity_owner(&self, app_id: &str, entity_id: &str) -> Result<()> {
+        let conn = self.conn.lock().expect("companion store poisoned");
+        conn.execute(
+            "DELETE FROM entity_ownership WHERE app_id = ?1 AND entity_id = ?2",
+            params![app_id, entity_id],
+        )?;
+        Ok(())
+    }
+
+    /// The member who owns `(app_id, entity_id)`, if any.
+    pub fn entity_owner(&self, app_id: &str, entity_id: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().expect("companion store poisoned");
+        conn.query_row(
+            "SELECT user_id FROM entity_ownership WHERE app_id = ?1 AND entity_id = ?2",
+            params![app_id, entity_id],
+            |r| r.get(0),
+        ).optional().map_err(Into::into)
+    }
+
+    /// All ownership bindings (admin view).
+    pub fn list_entity_ownership(&self) -> Result<Vec<EntityOwnership>> {
+        let conn = self.conn.lock().expect("companion store poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT app_id, entity_id, user_id, label FROM entity_ownership
+             ORDER BY user_id, app_id, entity_id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(EntityOwnership {
+                app_id:    r.get(0)?,
+                entity_id: r.get(1)?,
+                user_id:   r.get(2)?,
+                label:     r.get(3)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows { out.push(r?); }
+        Ok(out)
+    }
+
+    /// Every entity owned by `user_id` (across apps).
+    pub fn entities_of(&self, user_id: &str) -> Result<Vec<OwnedEntity>> {
+        let conn = self.conn.lock().expect("companion store poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT app_id, entity_id, label FROM entity_ownership
+             WHERE user_id = ?1 ORDER BY app_id, entity_id",
+        )?;
+        let rows = stmt.query_map(params![user_id], |r| {
+            Ok(OwnedEntity {
+                app_id:    r.get(0)?,
+                entity_id: r.get(1)?,
+                label:     r.get(2)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows { out.push(r?); }
+        Ok(out)
+    }
+
+    // All users currently in the "enabled AND past their paused_until"
+    // state. 's scheduler uses this to find candidates for a
+    // check-in tick. Setup-incomplete users are excluded — they don't
+    // have a safety contact yet, so the safety floor can't kick in.
+    pub fn list_active(&self, now: DateTime<Utc>) -> Result<Vec<CompanionSettings>> {
+        let conn = self.conn.lock().expect("companion store poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT user_id, enabled, paused_until,
+                    quiet_hours_json, preferred_channels_json,
+                    safety_contact_user_id, setup_completed_at,
+                    last_checkin_at, consecutive_missed_checkins,
+                    daily_briefing_enabled, daily_briefing_hour, last_briefing_at,
+                    created_at, updated_at, cadence_json, presence_json, carenet_json
+             FROM companion_settings
+             WHERE enabled = 1
+               AND setup_completed_at IS NOT NULL
+               AND (paused_until IS NULL OR paused_until <= ?1)
+             ORDER BY user_id ASC",
+        )?;
+        let rows = stmt.query_map(params![now.timestamp_millis()], row_to_settings)?;
+        let mut out = Vec::new();
+        for r in rows { out.push(r?); }
+        Ok(out)
+    }
+
+    // Delete the row entirely. Used when a user is deleted upstream;
+    // `companion_disable` only flips `enabled = 0`, preserving the
+    // settings so re-enable doesn't lose the safety contact / persona.
+    pub fn delete(&self, user_id: &str) -> Result<()> {
+        let conn = self.conn.lock().expect("companion store poisoned");
+        conn.execute(
+            "DELETE FROM companion_settings WHERE user_id = ?1",
+            params![user_id],
+        )?;
+        Ok(())
+    }
+}
+
+fn row_to_settings(row: &rusqlite::Row<'_>) -> rusqlite::Result<CompanionSettings> {
+    let user_id: String = row.get(0)?;
+    let enabled_i: i64  = row.get(1)?;
+    let paused_ms: Option<i64> = row.get(2)?;
+    let quiet_json: String = row.get(3)?;
+    let chan_json:  String = row.get(4)?;
+    let safety:     Option<String> = row.get(5)?;
+    let setup_ms:   Option<i64>    = row.get(6)?;
+    let last_ck_ms: Option<i64>    = row.get(7)?;
+    let missed_i:        i64         = row.get(8)?;
+    let brief_en_i:      i64         = row.get(9)?;
+    let brief_hour_i:    i64         = row.get(10)?;
+    let last_brief_ms:   Option<i64> = row.get(11)?;
+    let created_ms:      i64         = row.get(12)?;
+    let updated_ms:      i64         = row.get(13)?;
+    let cadence_json:    String      = row.get(14)?;
+    let presence_json:   String      = row.get(15)?;
+    let carenet_json:    String      = row.get(16)?;
+
+    // A malformed cadence/presence/carenet blob falls back to "inherit
+    // defaults" rather than failing the whole row read.
+    let cadence: CompanionCadence = serde_json::from_str(&cadence_json).unwrap_or_default();
+    let presence: PresenceTuning  = serde_json::from_str(&presence_json).unwrap_or_default();
+    let care: CareNet             = serde_json::from_str(&carenet_json).unwrap_or_default();
+
+    let quiet_hours: Vec<(String, String)> = serde_json::from_str(&quiet_json)
+        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+            3, rusqlite::types::Type::Text, Box::new(e),
+        ))?;
+    let preferred_channels: Vec<String> = serde_json::from_str(&chan_json)
+        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+            4, rusqlite::types::Type::Text, Box::new(e),
+        ))?;
+
+    Ok(CompanionSettings {
+        user_id,
+        enabled: enabled_i != 0,
+        paused_until: paused_ms.and_then(DateTime::from_timestamp_millis),
+        quiet_hours,
+        preferred_channels,
+        safety_contact_user_id: safety,
+        setup_completed_at: setup_ms.and_then(DateTime::from_timestamp_millis),
+        last_checkin_at: last_ck_ms.and_then(DateTime::from_timestamp_millis),
+        consecutive_missed_checkins: missed_i.max(0) as u32,
+        daily_briefing_enabled: brief_en_i != 0,
+        // Clamp to 0..=23 to defend against a bad ALTER default or a
+        // hand-edited row.
+        daily_briefing_hour:    brief_hour_i.clamp(0, 23) as u8,
+        last_briefing_at:       last_brief_ms.and_then(DateTime::from_timestamp_millis),
+        cadence,
+        presence,
+        care,
+        created_at: DateTime::from_timestamp_millis(created_ms).unwrap_or_else(Utc::now),
+        updated_at: DateTime::from_timestamp_millis(updated_ms).unwrap_or_else(Utc::now),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn entity_ownership_bind_lookup_remove_reassign() {
+        let (_dir, store) = fresh_store();
+        store.set_entity_owner("ha", "switch.kid_router", "kid", Some("Kid's router")).unwrap();
+        store.set_entity_owner("ha", "media_player.kid_tv", "kid", None).unwrap();
+        store.set_entity_owner("ha", "switch.gran_lamp", "gran", None).unwrap();
+
+        assert_eq!(store.entity_owner("ha", "switch.kid_router").unwrap().as_deref(), Some("kid"));
+        assert!(store.entity_owner("ha", "unknown").unwrap().is_none());
+
+        let mut kids: Vec<_> = store.entities_of("kid").unwrap().into_iter()
+            .map(|e| e.entity_id).collect();
+        kids.sort();
+        assert_eq!(kids, vec!["media_player.kid_tv".to_string(), "switch.kid_router".to_string()]);
+
+        // Re-binding an entity replaces its owner (PK on app+entity).
+        store.set_entity_owner("ha", "switch.kid_router", "gran", None).unwrap();
+        assert_eq!(store.entity_owner("ha", "switch.kid_router").unwrap().as_deref(), Some("gran"));
+        assert_eq!(store.entities_of("kid").unwrap().len(), 1); // only the TV remains
+
+        // Removal.
+        store.remove_entity_owner("ha", "switch.kid_router").unwrap();
+        assert!(store.entity_owner("ha", "switch.kid_router").unwrap().is_none());
+    }
+
+    fn fresh_store() -> (tempfile::TempDir, CompanionStore) {
+        let dir = tempdir().unwrap();
+        let store = CompanionStore::open(&dir.path().join("companion.db")).unwrap();
+        (dir, store)
+    }
+
+    fn sample(user_id: &str) -> CompanionSettings {
+        let now = Utc::now();
+        CompanionSettings {
+            user_id: user_id.to_string(),
+            enabled: false,
+            paused_until: None,
+            quiet_hours: vec![],
+            preferred_channels: vec![],
+            safety_contact_user_id: None,
+            setup_completed_at: None,
+            last_checkin_at: None,
+            consecutive_missed_checkins: 0,
+            daily_briefing_enabled: false,
+            daily_briefing_hour: 7,
+            last_briefing_at: None,
+            cadence: CompanionCadence::default(),
+            presence: PresenceTuning::default(),
+            care: CareNet::default(),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn get_returns_none_for_unseeded_user() {
+        let (_dir, store) = fresh_store();
+        assert!(store.get("nobody").unwrap().is_none());
+    }
+
+    #[test]
+    fn upsert_round_trips() {
+        let (_dir, store) = fresh_store();
+        let mut s = sample("alice");
+        s.enabled = true;
+        s.quiet_hours = vec![("22:00".into(), "06:30".into())];
+        s.preferred_channels = vec!["signal".into(), "telegram".into()];
+        s.safety_contact_user_id = Some("david".into());
+        s.setup_completed_at = Some(Utc::now());
+        store.upsert(&s).unwrap();
+
+        let back = store.get("alice").unwrap().unwrap();
+        assert!(back.enabled);
+        assert_eq!(back.quiet_hours, vec![("22:00".to_string(), "06:30".to_string())]);
+        assert_eq!(back.preferred_channels, vec!["signal".to_string(), "telegram".to_string()]);
+        assert_eq!(back.safety_contact_user_id.as_deref(), Some("david"));
+        assert!(back.setup_completed_at.is_some());
+    }
+
+    #[test]
+    fn carenet_round_trips_and_defaults_to_standard() {
+        let (_dir, store) = fresh_store();
+        // Fresh row → Standard, not monitored, no consent.
+        let mut s = sample("alice");
+        store.upsert(&s).unwrap();
+        let back = store.get("alice").unwrap().unwrap();
+        assert_eq!(back.care.role, CareRole::Standard);
+        assert!(!back.care.role.is_monitored());
+        assert!(back.care.consent_at.is_none());
+
+        // Set a monitored role + consent → round-trips.
+        s.care.role = CareRole::Child;
+        s.care.consent_at = Some(Utc::now());
+        store.upsert(&s).unwrap();
+        let back = store.get("alice").unwrap().unwrap();
+        assert_eq!(back.care.role, CareRole::Child);
+        assert!(back.care.role.is_monitored());
+        assert!(back.care.consent_at.is_some());
+    }
+
+    #[test]
+    fn supported_adult_role_is_monitored_and_round_trips() {
+        let (_dir, store) = fresh_store();
+        // The "an adult who needs support" role is monitored (a care contact
+        // watches over them) like child/elder — so disclosure + the wellbeing
+        // view gate apply — and it serialises as "adult".
+        assert!(CareRole::Adult.is_monitored());
+        assert_eq!(CareRole::Adult.as_str(), "adult");
+
+        let mut s = sample("alex");
+        s.care.role = CareRole::Adult;
+        s.care.consent_at = Some(Utc::now());
+        store.upsert(&s).unwrap();
+        let back = store.get("alex").unwrap().unwrap();
+        assert_eq!(back.care.role, CareRole::Adult);
+        assert!(back.care.role.is_monitored());
+    }
+
+    #[test]
+    fn mark_care_disclosed_stamps_consent_once() {
+        let (_dir, store) = fresh_store();
+        let mut s = sample("bob");
+        s.care.role = CareRole::Elder;
+        store.upsert(&s).unwrap();
+        assert!(store.get("bob").unwrap().unwrap().care.consent_at.is_none());
+
+        store.mark_care_disclosed("bob").unwrap();
+        let first = store.get("bob").unwrap().unwrap().care.consent_at;
+        assert!(first.is_some(), "disclosure should stamp consent_at");
+
+        // Idempotent: a second call doesn't move the timestamp.
+        store.mark_care_disclosed("bob").unwrap();
+        assert_eq!(store.get("bob").unwrap().unwrap().care.consent_at, first);
+    }
+
+    #[test]
+    fn presence_tuning_round_trips() {
+        let (_dir, store) = fresh_store();
+        let mut s = sample("alice");
+        s.presence.frequency_mode = FrequencyMode::Scheduled;
+        s.presence.min_per_day = 2;
+        s.presence.scheduled_times = vec!["09:00".into(), "18:30".into()];
+        s.presence.tone = ToneAxes { warmth: 80, playfulness: 70, verbosity: 30 };
+        s.presence.message_mix = MessageMix { joke: true, ..Default::default() };
+        s.presence.share_agent_activity = false;
+        store.upsert(&s).unwrap();
+
+        let back = store.get("alice").unwrap().unwrap().presence;
+        assert_eq!(back.frequency_mode, FrequencyMode::Scheduled);
+        assert_eq!(back.min_per_day, 2);
+        assert_eq!(back.scheduled_times, vec!["09:00".to_string(), "18:30".to_string()]);
+        assert_eq!(back.tone.warmth, 80);
+        assert_eq!(back.tone.verbosity, 30);
+        assert!(back.message_mix.joke);
+        assert!(!back.share_agent_activity);
+    }
+
+    #[test]
+    fn presence_defaults_when_column_empty() {
+        // Pre-migration rows / `{}` deserialise to sensible defaults, not an error.
+        let p: PresenceTuning = serde_json::from_str("{}").unwrap();
+        assert_eq!(p.frequency_mode, FrequencyMode::Fuzzy);
+        assert_eq!(p.min_per_day, 1);
+        assert!(p.message_mix.check_in && !p.message_mix.joke);
+        assert!(p.share_agent_activity);
+    }
+
+    #[test]
+    fn upsert_preserves_created_at_on_update() {
+        // The schema's ON CONFLICT clause excludes `created_at` from the
+        // update, so an upsert with a different `created_at` doesn't
+        // clobber the original. We don't rely on this in the facade
+        // (the facade reads-then-writes), but the constraint is worth
+        // protecting in case a future caller upserts a fresh struct.
+        let (_dir, store) = fresh_store();
+        let first = sample("alice");
+        store.upsert(&first).unwrap();
+        let mut second = sample("alice");
+        second.created_at = first.created_at + chrono::Duration::hours(1);
+        store.upsert(&second).unwrap();
+        let back = store.get("alice").unwrap().unwrap();
+        assert_eq!(back.created_at.timestamp_millis(), first.created_at.timestamp_millis());
+    }
+
+    #[test]
+    fn list_active_filters_by_enabled_and_setup() {
+        let (_dir, store) = fresh_store();
+        let now = Utc::now();
+
+        // Enabled + setup done → listed
+        let mut alice = sample("alice");
+        alice.enabled = true;
+        alice.setup_completed_at = Some(now);
+        store.upsert(&alice).unwrap();
+
+        // Enabled but setup not done → NOT listed (no safety floor yet)
+        let mut bob = sample("bob");
+        bob.enabled = true;
+        store.upsert(&bob).unwrap();
+
+        // Disabled → NOT listed
+        let charlie = sample("charlie");
+        store.upsert(&charlie).unwrap();
+
+        // Enabled + setup done + paused in the future → NOT listed
+        let mut dora = sample("dora");
+        dora.enabled = true;
+        dora.setup_completed_at = Some(now);
+        dora.paused_until = Some(now + chrono::Duration::hours(1));
+        store.upsert(&dora).unwrap();
+
+        let active = store.list_active(now).unwrap();
+        let names: Vec<&str> = active.iter().map(|s| s.user_id.as_str()).collect();
+        assert_eq!(names, vec!["alice"]);
+    }
+
+    #[test]
+    fn is_active_respects_setup_and_pause() {
+        let now = Utc::now();
+        let mut s = sample("u");
+        assert!(!s.is_active(now));
+        s.enabled = true;
+        assert!(!s.is_active(now), "setup not done");
+        s.setup_completed_at = Some(now);
+        assert!(s.is_active(now));
+        s.paused_until = Some(now + chrono::Duration::minutes(30));
+        assert!(!s.is_active(now), "paused into the future");
+        s.paused_until = Some(now - chrono::Duration::minutes(1));
+        assert!(s.is_active(now), "pause expired");
+    }
+
+    #[test]
+    fn mark_checkin_stamps_only_that_column() {
+        let (_dir, store) = fresh_store();
+        let mut s = sample("alice");
+        s.enabled = true;
+        s.safety_contact_user_id = Some("david".into());
+        s.setup_completed_at = Some(Utc::now());
+        store.upsert(&s).unwrap();
+
+        // Should round-trip as None initially.
+        assert!(store.get("alice").unwrap().unwrap().last_checkin_at.is_none());
+
+        let at = Utc::now();
+        store.mark_checkin("alice", at).unwrap();
+        let back = store.get("alice").unwrap().unwrap();
+        assert!(back.last_checkin_at.is_some());
+        // Round-trip is within 1s (ms precision; bounded).
+        let diff = (back.last_checkin_at.unwrap() - at).num_milliseconds().abs();
+        assert!(diff < 1000, "diff {diff}ms");
+
+        // Other fields untouched.
+        assert!(back.enabled);
+        assert_eq!(back.safety_contact_user_id.as_deref(), Some("david"));
+    }
+
+    #[test]
+    fn increment_and_reset_missed_checkins_round_trip() {
+        let (_dir, store) = fresh_store();
+        let mut s = sample("alice");
+        s.enabled = true;
+        s.safety_contact_user_id = Some("david".into());
+        s.setup_completed_at = Some(Utc::now());
+        store.upsert(&s).unwrap();
+
+        // Three consecutive fires without a reset → count is 3.
+        assert_eq!(store.increment_missed_checkins("alice").unwrap(), 1);
+        assert_eq!(store.increment_missed_checkins("alice").unwrap(), 2);
+        assert_eq!(store.increment_missed_checkins("alice").unwrap(), 3);
+        let back = store.get("alice").unwrap().unwrap();
+        assert_eq!(back.consecutive_missed_checkins, 3);
+
+        // Reset (user sent a message).
+        store.reset_missed_checkins("alice").unwrap();
+        let back = store.get("alice").unwrap().unwrap();
+        assert_eq!(back.consecutive_missed_checkins, 0);
+
+        // Subsequent fires resume from 0.
+        assert_eq!(store.increment_missed_checkins("alice").unwrap(), 1);
+    }
+
+    #[test]
+    fn increment_missed_on_missing_user_is_safe() {
+        let (_dir, store) = fresh_store();
+        // No row, no panic; UPDATE matches zero rows. Reading back
+        // returns 0 (the unwrap_or in the helper).
+        assert_eq!(store.increment_missed_checkins("ghost").unwrap(), 0);
+    }
+
+    #[test]
+    fn mark_checkin_is_idempotent_on_missing_user() {
+        // Mark before enable shouldn't crash; it's just a no-op
+        // (rusqlite returns 0 rows affected).
+        let (_dir, store) = fresh_store();
+        store.mark_checkin("ghost", Utc::now()).unwrap();
+        assert!(store.get("ghost").unwrap().is_none());
+    }
+
+    #[test]
+    fn checkins_today_counts_and_rolls_over_per_local_day() {
+        let (_dir, store) = fresh_store();
+        let mut s = sample("alice");
+        s.enabled = true;
+        s.setup_completed_at = Some(Utc::now());
+        store.upsert(&s).unwrap();
+
+        // No fires yet.
+        assert_eq!(store.checkins_today("alice", "2026-06-16").unwrap(), 0);
+
+        // Two fires on the same local day accumulate.
+        assert_eq!(store.bump_checkins_today("alice", "2026-06-16").unwrap(), 1);
+        assert_eq!(store.bump_checkins_today("alice", "2026-06-16").unwrap(), 2);
+        assert_eq!(store.checkins_today("alice", "2026-06-16").unwrap(), 2);
+
+        // New local day → counter rolls over (reads 0, next bump resets to 1).
+        assert_eq!(store.checkins_today("alice", "2026-06-17").unwrap(), 0);
+        assert_eq!(store.bump_checkins_today("alice", "2026-06-17").unwrap(), 1);
+        // The prior day now reads 0 — the stored day has moved on.
+        assert_eq!(store.checkins_today("alice", "2026-06-16").unwrap(), 0);
+    }
+
+    #[test]
+    fn delete_removes_row() {
+        let (_dir, store) = fresh_store();
+        let s = sample("alice");
+        store.upsert(&s).unwrap();
+        assert!(store.get("alice").unwrap().is_some());
+        store.delete("alice").unwrap();
+        assert!(store.get("alice").unwrap().is_none());
+    }
+}

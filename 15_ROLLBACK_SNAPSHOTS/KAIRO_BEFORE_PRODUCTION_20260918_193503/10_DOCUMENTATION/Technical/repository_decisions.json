@@ -1,0 +1,68 @@
+{
+  "project": "KAIRO",
+  "decision_date": "2026-09-15",
+  "mode": "architecture-review-only",
+  "execution": false,
+  "foundation": {
+    "scope": "KAIRO foundation",
+    "strategy": "KEEP",
+    "rationale": "KAIRO-owned policy-first scaffold and audit artifacts are the integration baseline."
+  },
+  "candidates": [
+    {
+      "repository": "Awesome-Personal-AI",
+      "strategy": "ADAPT",
+      "rationale": "CC0 discovery catalog; it is reference material rather than an implementation.",
+      "next_step": "Normalize relevant entries into a KAIRO-owned candidate inventory."
+    },
+    {
+      "repository": "memU",
+      "strategy": "EXTRACT",
+      "rationale": "Focused Python memory subsystem with Apache-2.0 licensing and tests.",
+      "next_step": "Evaluate one minimal memory component in a sandbox before copying."
+    },
+    {
+      "repository": "MIRA",
+      "strategy": "REWRITE",
+      "rationale": "Broad Rust-based AGPL-3.0 product; preserve requirements without importing its implementation.",
+      "next_step": "Create KAIRO-owned specifications for selected capabilities."
+    },
+    {
+      "repository": "OCT-Agent",
+      "strategy": "EXTRACT",
+      "rationale": "Apache-2.0 modular source, but too broad for wholesale adoption.",
+      "next_step": "Select and sandbox one non-privileged component."
+    },
+    {
+      "repository": "Open-Computer-Use",
+      "strategy": "ADAPT",
+      "rationale": "Relevant sandbox design, but Functional Source License review and a high-risk execution surface require an interface-first approach.",
+      "next_step": "Define a sandbox-provider interface and evaluate it as an isolated optional provider."
+    },
+    {
+      "repository": "OpenMind",
+      "strategy": "REWRITE",
+      "rationale": "Pre-v1 broad assistant with no root license file in this local copy.",
+      "next_step": "Capture safe local-first requirements, then reimplement approved functionality."
+    },
+    {
+      "repository": "Repos",
+      "strategy": "ARCHIVE",
+      "rationale": "Large heterogeneous collection, not a coherent dependency or component.",
+      "next_step": "Classify individual subrepositories only when a justified capability gap exists."
+    },
+    {
+      "repository": "VoltAgent",
+      "strategy": "ADAPT",
+      "rationale": "Useful modular-agent patterns, but substantial TypeScript coupling and missing local license text require verification before use.",
+      "next_step": "Verify source provenance and license before any optional upstream evaluation."
+    }
+  ],
+  "exit_criteria": [
+    "Record license and origin.",
+    "Review and pin dependencies.",
+    "Assess secrets, permissions, network access, and destructive operations.",
+    "Pass isolated build and tests.",
+    "Add a KAIRO-owned interface, tests, provenance note, and rollback path."
+  ]
+}

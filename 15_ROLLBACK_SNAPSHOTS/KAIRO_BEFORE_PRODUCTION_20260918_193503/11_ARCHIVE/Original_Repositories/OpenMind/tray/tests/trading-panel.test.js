@@ -1,0 +1,1265 @@
+'use strict';
+
+// Unit tests for tray/lib/trading-panel.js -- specifically renderLiveStrategyCard's
+// fills table (S12/#856 Part B: phase must be visibly rendered, not just present
+// in the broadcast data). testEnvironment is "node" project-wide (no jsdom
+// dependency installed) -- a minimal fake `document`/container stand in for the
+// DOM APIs renderLiveStrategyCard actually touches (innerHTML assignment, plus
+// the one-time <style> injection it does via document.getElementById/
+// createElement/head.appendChild).
+
+const TradingPanel = require('../lib/trading-panel');
+
+function fakeContainer() {
+  return { innerHTML: '' };
+}
+
+function withFakeDocument(fn) {
+  const styleEls = [];
+  global.document = {
+    getElementById: () => null, // style tag never yet injected
+    createElement: () => ({ set textContent(_v) {}, id: '' }),
+    head: { appendChild: (el) => styleEls.push(el) },
+  };
+  try {
+    fn();
+  } finally {
+    delete global.document;
+  }
+}
+
+const BASE_DATA = {
+  name: 'penny breakout', status: 'live', live_trades: 5, equity_curve: [1, 2, 3],
+  alerts: [],
+};
+
+describe('renderLiveStrategyCard fills table', () => {
+  test('reads data.recent_fills (the real _trading_broadcast key), not data.fills', () => {
+    withFakeDocument(() => {
+      const container = fakeContainer();
+      const data = {
+        ...BASE_DATA,
+        recent_fills: [{ symbol: 'AAPL', side: 'buy', pnl: 12.5, phase: 'paper' }],
+      };
+      TradingPanel.renderLiveStrategyCard(data, container);
+      expect(container.innerHTML).toContain('AAPL');
+      expect(container.innerHTML).toContain('12.50');
+      expect(container.innerHTML).not.toContain('No fills yet');
+    });
+  });
+
+  test('a live fill renders a visible LIVE phase badge, distinct from paper', () => {
+    withFakeDocument(() => {
+      const container = fakeContainer();
+      const data = {
+        ...BASE_DATA,
+        recent_fills: [
+          { symbol: 'AAPL', side: 'sell', pnl: -3.0, phase: 'live' },
+          { symbol: 'TSLA', side: 'buy', pnl: 4.0, phase: 'paper' },
+        ],
+      };
+      TradingPanel.renderLiveStrategyCard(data, container);
+      expect(container.innerHTML).toContain('phase-badge live');
+      expect(container.innerHTML).toContain('phase-badge paper');
+      expect(container.innerHTML).toContain('>LIVE<');
+      expect(container.innerHTML).toContain('>PAPER<');
+    });
+  });
+
+  test('no fills still renders the empty-state row, not a crash', () => {
+    withFakeDocument(() => {
+      const container = fakeContainer();
+      TradingPanel.renderLiveStrategyCard({ ...BASE_DATA, recent_fills: [] }, container);
+      expect(container.innerHTML).toContain('No fills yet');
+    });
+  });
+});
+
+// S19 (#864): multi-strategy list, provenance/version rendering, and the
+// edit box's real event shape. renderTradingUpdate itself calls
+// mount.querySelectorAll/querySelector after setting innerHTML (to wire the
+// list-click and Save handlers) -- fakeInteractiveMount below stubs those as
+// no-ops (this suite has no jsdom to make them real) so the function doesn't
+// throw; what actually gets rendered is verified against the innerHTML
+// string itself, matching this file's own established assertion style.
+
+function fakeInteractiveMount() {
+  return {
+    innerHTML: '',
+    querySelectorAll: () => ({ forEach: () => {} }),
+    querySelector: () => null,
+  };
+}
+
+const TWO_STRATEGIES = [
+  {
+    name: 'MA cross A', status: 'paper', version: 2,
+    provenance: 'MA cross trend test, as modified by user (v2)',
+    code: 'def strategy(data):\n    return [1]\n',
+    recent_fills: [], equity_curve: [],
+  },
+  {
+    name: 'MA cross B', status: 'live', version: 1,
+    provenance: 'generated (v1)',
+    code: 'def strategy(data):\n    return [0]\n',
+    recent_fills: [], equity_curve: [],
+  },
+];
+
+describe('renderTradingUpdate (S19 multi-strategy panel)', () => {
+  test('renders every strategy in the list, not just positions[0]', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradingUpdate({ positions: TWO_STRATEGIES, alerts: [] }, mount);
+      expect(mount.innerHTML).toContain('MA cross A');
+      expect(mount.innerHTML).toContain('MA cross B');
+    });
+  });
+
+  test('provenance and version are actually rendered, not just present in the data', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradingUpdate({ positions: TWO_STRATEGIES, alerts: [] }, mount);
+      // The selected (first) strategy's detail pane is what's visible.
+      expect(mount.innerHTML).toContain('v2');
+      expect(mount.innerHTML).toContain('MA cross trend test, as modified by user');
+      expect(mount.innerHTML).toContain('def strategy(data):');
+    });
+  });
+
+  test('a strategy with no lineage shows a plain fallback, not blank/undefined', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      const noLineage = [{ ...TWO_STRATEGIES[0], provenance: '', version: 0, code: '' }];
+      TradingPanel.renderTradingUpdate({ positions: noLineage, alerts: [] }, mount);
+      expect(mount.innerHTML).toContain('No lineage recorded.');
+      expect(mount.innerHTML).not.toContain('undefined');
+    });
+  });
+});
+
+// S32/#898 (2026-08-27): user feedback -- no way to tell if a strategy is
+// actually trading (list showed only name + status) and no way to stop
+// one manually (only the automatic CI/drawdown halt existed).
+describe('renderTradingUpdate trade-count badge (S32/#898)', () => {
+  test('shows the real live_trades count in the list', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      const strategies = [{ ...TWO_STRATEGIES[0], live_trades: 7 }];
+      TradingPanel.renderTradingUpdate({ positions: strategies, alerts: [] }, mount);
+      expect(mount.innerHTML).toContain('7 trades');
+    });
+  });
+
+  test('a strategy with no trades yet shows "0 trades", not undefined', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      const strategies = [{ ...TWO_STRATEGIES[0], live_trades: 0 }];
+      TradingPanel.renderTradingUpdate({ positions: strategies, alerts: [] }, mount);
+      expect(mount.innerHTML).toContain('0 trades');
+      expect(mount.innerHTML).not.toContain('undefined');
+    });
+  });
+
+  test('a missing live_trades field defaults to 0 rather than rendering undefined', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradingUpdate({ positions: TWO_STRATEGIES, alerts: [] }, mount);
+      expect(mount.innerHTML).not.toContain('undefined');
+    });
+  });
+
+  test('exactly one trade is singular, not "1 trades"', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      const strategies = [{ ...TWO_STRATEGIES[0], live_trades: 1 }];
+      TradingPanel.renderTradingUpdate({ positions: strategies, alerts: [] }, mount);
+      expect(mount.innerHTML).toContain('1 trade<');
+      expect(mount.innerHTML).not.toContain('1 trades');
+    });
+  });
+});
+
+// S46b (2026-08-29): S46a added confidence_weight/is_expansion to the
+// broadcast (built on S38's compute_confidence_weight / S39's expansion
+// suffix) -- this campaign's own observability follow-up to the S38-S43
+// learning-loop queue, since neither was surfaced anywhere before.
+describe('renderTradingUpdate confidence-weight + expansion badges (S46b)', () => {
+  test('shows the confidence weight, styled positive', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      const strategies = [{ ...TWO_STRATEGIES[0], confidence_weight: 0.42 }];
+      TradingPanel.renderTradingUpdate({ positions: strategies, alerts: [] }, mount);
+      expect(mount.innerHTML).toContain('0.42');
+      expect(mount.innerHTML).toContain('confidence-badge positive');
+    });
+  });
+
+  test('a negative confidence weight is styled negative, not positive', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      const strategies = [{ ...TWO_STRATEGIES[0], confidence_weight: -0.15 }];
+      TradingPanel.renderTradingUpdate({ positions: strategies, alerts: [] }, mount);
+      expect(mount.innerHTML).toContain('-0.15');
+      expect(mount.innerHTML).toContain('confidence-badge negative');
+      expect(mount.innerHTML).not.toContain('confidence-badge positive');
+    });
+  });
+
+  test('a missing confidence_weight field defaults to 0.00 neutral rather than rendering undefined', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradingUpdate({ positions: TWO_STRATEGIES, alerts: [] }, mount);
+      expect(mount.innerHTML).toContain('0.00');
+      expect(mount.innerHTML).toContain('confidence-badge neutral');
+      expect(mount.innerHTML).not.toContain('undefined');
+    });
+  });
+
+  test('an expanded strategy (is_expansion: true) shows the expansion badge', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      const strategies = [{ ...TWO_STRATEGIES[0], is_expansion: true }];
+      TradingPanel.renderTradingUpdate({ positions: strategies, alerts: [] }, mount);
+      expect(mount.innerHTML).toContain('expansion-badge');
+      expect(mount.innerHTML).toContain('expanded');
+    });
+  });
+
+  test('a non-expansion strategy shows no expansion badge', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      const strategies = [{ ...TWO_STRATEGIES[0], is_expansion: false }];
+      TradingPanel.renderTradingUpdate({ positions: strategies, alerts: [] }, mount);
+      expect(mount.innerHTML).not.toContain('expansion-badge');
+    });
+  });
+});
+
+describe('buildHaltStrategyEvent / buildResumeStrategyEvent (S32/#898)', () => {
+  test('halt_strategy carries the strategy id', () => {
+    expect(TradingPanel.buildHaltStrategyEvent('my strategy@v1')).toEqual({
+      type: 'call_tool', data: { name: 'halt_strategy', args: { strategy_id: 'my strategy@v1' } },
+    });
+  });
+
+  test('resume_strategy carries the strategy id', () => {
+    expect(TradingPanel.buildResumeStrategyEvent('my strategy@v1')).toEqual({
+      type: 'call_tool', data: { name: 'resume_strategy', args: { strategy_id: 'my strategy@v1' } },
+    });
+  });
+});
+
+describe('renderTradingUpdate Halt/Resume button (S32/#898)', () => {
+  test('an active (non-halted) strategy shows Halt', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradingUpdate({ positions: [{ ...TWO_STRATEGIES[0], status: 'paper' }], alerts: [] }, mount);
+      expect(mount.innerHTML).toContain('>Halt<');
+      expect(mount.innerHTML).not.toContain('>Resume<');
+    });
+  });
+
+  test('a halted strategy shows Resume, not Halt', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradingUpdate({ positions: [{ ...TWO_STRATEGIES[0], status: 'halted' }], alerts: [] }, mount);
+      expect(mount.innerHTML).toContain('>Resume<');
+      expect(mount.innerHTML).not.toContain('>Halt<');
+    });
+  });
+});
+
+// S31 (#896): manual discovery start/stop + duration control. The control
+// must render on BOTH the empty-positions and populated branches (it's
+// independent of whether any strategy exists yet) -- that's the real bug
+// class this suite guards against, not just "does the button show up."
+describe('renderTradingUpdate discovery control (S31/#896)', () => {
+  test('renders even with zero strategies -- not hidden behind the empty state', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradingUpdate({ positions: [], alerts: [], discovery: { enabled: false } }, mount);
+      expect(mount.innerHTML).toContain('No active strategies');
+      expect(mount.innerHTML).toContain('Autonomous Discovery');
+      expect(mount.innerHTML).toContain('discovery-start-btn');
+      expect(mount.innerHTML).toContain('discovery-stop-btn');
+    });
+  });
+
+  test('renders alongside a populated strategy list too', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradingUpdate({ positions: TWO_STRATEGIES, alerts: [], discovery: { enabled: false } }, mount);
+      expect(mount.innerHTML).toContain('Autonomous Discovery');
+      expect(mount.innerHTML).toContain('MA cross A');
+    });
+  });
+
+  test('disabled discovery shows Stopped, Start enabled, Stop disabled', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradingUpdate({ positions: [], alerts: [], discovery: { enabled: false } }, mount);
+      expect(mount.innerHTML).toContain('Stopped');
+      expect(mount.innerHTML).toContain('discovery-start-btn" >');
+      expect(mount.innerHTML).toContain('discovery-stop-btn" disabled>');
+    });
+  });
+
+  test('enabled discovery with no stop_at shows "Running indefinitely", Start disabled, Stop enabled', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradingUpdate({ positions: [], alerts: [], discovery: { enabled: true, stop_at: '' } }, mount);
+      expect(mount.innerHTML).toContain('Running indefinitely');
+      expect(mount.innerHTML).toContain('discovery-start-btn" disabled>');
+      expect(mount.innerHTML).toContain('discovery-stop-btn" >');
+    });
+  });
+
+  test('enabled discovery with a stop_at shows a real stop time, not just "Running"', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradingUpdate({
+        positions: [], alerts: [],
+        discovery: { enabled: true, stop_at: '2026-08-26T00:00:00+00:00' },
+      }, mount);
+      expect(mount.innerHTML).toContain('Running -- stops');
+      expect(mount.innerHTML).not.toContain('Running indefinitely');
+    });
+  });
+
+  test('missing discovery data entirely renders as stopped, not a crash', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradingUpdate({ positions: [], alerts: [] }, mount);
+      expect(mount.innerHTML).toContain('Stopped');
+    });
+  });
+});
+
+// S34 (#901): manual paper-trading start/stop + starting-capital control,
+// mirroring the Discovery control above. Same "must render on both
+// branches" discipline.
+describe('renderTradingUpdate paper-trading control (S34/#901)', () => {
+  test('renders even with zero strategies -- not hidden behind the empty state', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradingUpdate({ positions: [], alerts: [], paper_control: { enabled: true, starting_capital: 10000 } }, mount);
+      expect(mount.innerHTML).toContain('No active strategies');
+      expect(mount.innerHTML).toContain('Paper Trading');
+      expect(mount.innerHTML).toContain('paper-start-btn');
+      expect(mount.innerHTML).toContain('paper-stop-btn');
+    });
+  });
+
+  test('renders alongside a populated strategy list too', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradingUpdate({ positions: TWO_STRATEGIES, alerts: [], paper_control: { enabled: true, starting_capital: 10000 } }, mount);
+      expect(mount.innerHTML).toContain('Paper Trading');
+      expect(mount.innerHTML).toContain('MA cross A');
+    });
+  });
+
+  test('enabled shows Running, Start disabled, Stop enabled', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradingUpdate({ positions: [], alerts: [], paper_control: { enabled: true, starting_capital: 10000 } }, mount);
+      expect(mount.innerHTML).toContain('Running');
+      expect(mount.innerHTML).toContain('paper-start-btn" disabled>');
+      expect(mount.innerHTML).toContain('paper-stop-btn" >');
+    });
+  });
+
+  test('disabled shows Stopped, Start enabled, Stop disabled', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradingUpdate({ positions: [], alerts: [], paper_control: { enabled: false, starting_capital: 10000 } }, mount);
+      expect(mount.innerHTML).toContain('Stopped');
+      expect(mount.innerHTML).toContain('paper-start-btn" >');
+      expect(mount.innerHTML).toContain('paper-stop-btn" disabled>');
+    });
+  });
+
+  test('renders the current starting capital in the input value', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradingUpdate({ positions: [], alerts: [], paper_control: { enabled: true, starting_capital: 25000 } }, mount);
+      expect(mount.innerHTML).toContain('value="25000"');
+    });
+  });
+
+  // Opposite default polarity from Discovery (defaults OFF) is intentional
+  // -- trading_paper_enabled's own real settings default is True.
+  test('missing paper_control data entirely renders as running, not a crash', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradingUpdate({ positions: [], alerts: [] }, mount);
+      expect(mount.innerHTML).toContain('Paper Trading');
+      expect(mount.innerHTML).toContain('Running');
+    });
+  });
+
+  // Live incident 2026-08-31: a user set starting_capital expecting it to
+  // control what the next session actually trades with -- it only ever
+  // affects the StubBrokerClient fallback, and once real Alpaca paper
+  // credentials exist that's not what's placing orders. The input must
+  // say so, not silently no-op.
+  test('broker "alpaca" disables the capital input and explains why', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradingUpdate({ positions: [], alerts: [], paper_control: { enabled: true, starting_capital: 10000, broker: 'alpaca' } }, mount);
+      expect(mount.innerHTML).toContain('paper-capital-input" min="0" step="100" value="10000" disabled>');
+      expect(mount.innerHTML).toContain('paper-capital-save-btn" disabled>');
+      expect(mount.innerHTML).toContain('not used -- trading against your real Alpaca paper account balance');
+    });
+  });
+
+  test('broker "stub" (or missing) keeps the capital input editable with the restart hint', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradingUpdate({ positions: [], alerts: [], paper_control: { enabled: true, starting_capital: 10000, broker: 'stub' } }, mount);
+      expect(mount.innerHTML).toContain('paper-capital-input" min="0" step="100" value="10000" >');
+      expect(mount.innerHTML).toContain('paper-capital-save-btn" >');
+      expect(mount.innerHTML).toContain('takes effect after next restart');
+    });
+  });
+});
+
+// 2026-08-31: market-wide sentiment gate on new paper opens, read-only
+// badge next to the Paper Trading control (see cerebral/trading/
+// sentiment.py's MarketSentimentGate, threaded through _trading_broadcast's
+// "sentiment" key).
+describe('renderTradingUpdate sentiment badge (2026-08-31)', () => {
+  test('renders the current label and reason when the gate is enabled', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradingUpdate({
+        positions: [], alerts: [],
+        sentiment: { label: 'BEARISH', reason: 'inflation data spooked investors', enabled: true },
+      }, mount);
+      expect(mount.innerHTML).toContain('Market Sentiment');
+      expect(mount.innerHTML).toContain('BEARISH');
+      expect(mount.innerHTML).toContain('inflation data spooked investors');
+    });
+  });
+
+  test('renders alongside a populated strategy list too', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradingUpdate({
+        positions: TWO_STRATEGIES, alerts: [],
+        sentiment: { label: 'BULLISH', reason: 'broad gains', enabled: true },
+      }, mount);
+      expect(mount.innerHTML).toContain('Market Sentiment');
+      expect(mount.innerHTML).toContain('MA cross A');
+    });
+  });
+
+  test('renders nothing when the gate is disabled', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradingUpdate({
+        positions: [], alerts: [],
+        sentiment: { label: 'NEUTRAL', reason: 'no strong signal', enabled: false },
+      }, mount);
+      expect(mount.innerHTML).not.toContain('Market Sentiment');
+    });
+  });
+
+  test('missing sentiment data entirely renders fine, not a crash', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradingUpdate({ positions: [], alerts: [] }, mount);
+      expect(mount.innerHTML).not.toContain('Market Sentiment');
+      expect(mount.innerHTML).toContain('Paper Trading');
+    });
+  });
+});
+
+// 2026-08-27: Books moved out to its own Trading sub-tab (previously
+// embedded atop the Strategies sub-tab, see renderTradingUpdate below for
+// the "it's gone from there now" regression guard) -- renderBooksPanel
+// reads the exact same trading_update payload, just into its own mount.
+describe('renderBooksPanel (2026-08-27, was "renderTradingUpdate books section")', () => {
+  test('renders even with zero strategies and no books uploaded yet', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderBooksPanel({ positions: [], alerts: [] }, mount);
+      expect(mount.innerHTML).toContain('Books');
+      expect(mount.innerHTML).toContain('books-file-input');
+      expect(mount.innerHTML).toContain('No books uploaded yet.');
+    });
+  });
+
+  test('shows which model is reading books, when known', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderBooksPanel({
+        positions: [], alerts: [], books: [], books_model: 'Budd thinking',
+      }, mount);
+      expect(mount.innerHTML).toContain('reading with Budd thinking');
+    });
+  });
+
+  test('omits the reading-with label when no books_model is given', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderBooksPanel({ positions: [], alerts: [], books: [] }, mount);
+      expect(mount.innerHTML).not.toContain('reading with');
+    });
+  });
+
+  test('a processing book shows a progress bar and chunk count', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderBooksPanel({
+        positions: [], alerts: [],
+        books: [{ id: 1, title: 'Reminiscences', filename: 'r.pdf', status: 'processing', total_chunks: 20, processed_chunks: 8, strategies_found: 1, error_message: '' }],
+      }, mount);
+      expect(mount.innerHTML).toContain('book-progress-bar');
+      expect(mount.innerHTML).toContain('width:40%');
+      expect(mount.innerHTML).toContain('8/20 chunks');
+    });
+  });
+
+  test('a done book does not show a progress bar', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderBooksPanel({
+        positions: [], alerts: [],
+        books: [{ id: 1, title: 'Done Book', filename: 'd.pdf', status: 'done', total_chunks: 5, processed_chunks: 5, strategies_found: 2, error_message: '' }],
+      }, mount);
+      expect(mount.innerHTML).not.toContain('book-progress-bar');
+    });
+  });
+
+  // 2026-08-27: "N strategies found" was actually every gauntlet dispatch
+  // attempt (pass or fail) -- confusingly high (e.g. "190 strategies
+  // found" against 3 real validated ones). Now split into a plain
+  // dispatch count and a real "N valid strategies" figure with a
+  // drill-down into what they actually are.
+  test('shows dispatch count separately from the real valid-strategy count', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderBooksPanel({
+        positions: [], alerts: [],
+        books: [{
+          id: 1, title: 'The Intelligent Investor', filename: 'ii.mobi', status: 'processing',
+          total_chunks: 205, processed_chunks: 42, strategies_found: 190, error_message: '',
+          valid_strategies: [
+            { strategy_id: 's1', symbol: 'AAPL', hypothesis: 'Buy Dow dogs by yield/sqrt(price)', chapter: 'chunk 16', version: 1, code: 'def strategy(data): ...', created_at: '2026-08-27T00:16:00Z' },
+          ],
+        }],
+      }, mount);
+      expect(mount.innerHTML).toContain('190 dispatches');
+      expect(mount.innerHTML).toContain('1 valid strategy');
+      expect(mount.innerHTML).not.toContain('190 strategies found');
+    });
+  });
+
+  test('a book with zero valid strategies shows a disabled toggle', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderBooksPanel({
+        positions: [], alerts: [],
+        books: [{ id: 1, title: 'No Hits Yet', filename: 'x.pdf', status: 'processing', total_chunks: 5, processed_chunks: 1, strategies_found: 0, error_message: '', valid_strategies: [] }],
+      }, mount);
+      expect(mount.innerHTML).toContain('0 valid strategies');
+      expect(mount.innerHTML).toMatch(/book-valid-toggle[^>]*disabled/);
+    });
+  });
+
+  test('valid strategy details (symbol, hypothesis, chapter) are present in the DOM for drill-down', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderBooksPanel({
+        positions: [], alerts: [],
+        books: [{
+          id: 1, title: 'Market Wizards', filename: 'mw.pdf', status: 'done',
+          total_chunks: 10, processed_chunks: 10, strategies_found: 20, error_message: '',
+          valid_strategies: [
+            { strategy_id: 's1', symbol: 'AAPL', hypothesis: 'A real extracted claim', chapter: 'chunk 3', version: 1, code: '...', created_at: '2026-08-27T00:00:00Z' },
+          ],
+        }],
+      }, mount);
+      expect(mount.innerHTML).toContain('book-valid-list');
+      expect(mount.innerHTML).toContain('A real extracted claim');
+      expect(mount.innerHTML).toContain('chunk 3');
+    });
+  });
+
+  test('an errored book surfaces the real error message, not just "error"', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderBooksPanel({
+        positions: [], alerts: [],
+        books: [{ id: 1, title: 'Bad Book', filename: 'b.epub', status: 'error', total_chunks: 0, processed_chunks: 0, strategies_found: 0, error_message: 'Could not extract any text' }],
+      }, mount);
+      expect(mount.innerHTML).toContain('Error: Could not extract any text');
+    });
+  });
+
+  test('a processing book shows a Stop button', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderBooksPanel({
+        positions: [], alerts: [],
+        books: [{ id: 5, title: 'Reminiscences', filename: 'r.pdf', status: 'processing', total_chunks: 20, processed_chunks: 8, strategies_found: 1, error_message: '' }],
+      }, mount);
+      expect(mount.innerHTML).toContain('book-stop-btn');
+      expect(mount.innerHTML).toContain('data-book-id="5"');
+    });
+  });
+
+  test('a done book has no Stop button, but keeps Redo and Delete', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderBooksPanel({
+        positions: [], alerts: [],
+        books: [{ id: 5, title: 'Done Book', filename: 'd.pdf', status: 'done', total_chunks: 5, processed_chunks: 5, strategies_found: 2, error_message: '' }],
+      }, mount);
+      expect(mount.innerHTML).not.toContain('book-stop-btn');
+      expect(mount.innerHTML).toContain('book-retry-btn');
+      expect(mount.innerHTML).toContain('book-delete-btn');
+    });
+  });
+
+  // S33/#900 (2026-08-28): real pause/resume -- Resume continues from
+  // processed_chunks, distinct from Redo's always-restart-from-0.
+  test('a stopped book shows a Resume button alongside Redo', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderBooksPanel({
+        positions: [], alerts: [],
+        books: [{ id: 5, title: 'Paused Book', filename: 'p.pdf', status: 'stopped', total_chunks: 20, processed_chunks: 8, strategies_found: 1, error_message: '' }],
+      }, mount);
+      expect(mount.innerHTML).toContain('book-resume-btn');
+      expect(mount.innerHTML).toContain('book-retry-btn');
+    });
+  });
+
+  test('a processing book has no Resume button (nothing to resume yet)', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderBooksPanel({
+        positions: [], alerts: [],
+        books: [{ id: 5, title: 'Active Book', filename: 'a.pdf', status: 'processing', total_chunks: 20, processed_chunks: 8, strategies_found: 1, error_message: '' }],
+      }, mount);
+      expect(mount.innerHTML).not.toContain('book-resume-btn');
+    });
+  });
+
+  test('a done book has no Resume button', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderBooksPanel({
+        positions: [], alerts: [],
+        books: [{ id: 5, title: 'Done Book', filename: 'd.pdf', status: 'done', total_chunks: 5, processed_chunks: 5, strategies_found: 2, error_message: '' }],
+      }, mount);
+      expect(mount.innerHTML).not.toContain('book-resume-btn');
+    });
+  });
+
+  test('multiple books each render their own row', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderBooksPanel({
+        positions: [], alerts: [],
+        books: [
+          { id: 1, title: 'Book One', filename: 'a.pdf', status: 'done', total_chunks: 1, processed_chunks: 1, strategies_found: 0, error_message: '' },
+          { id: 2, title: 'Book Two', filename: 'b.pdf', status: 'queued', total_chunks: 0, processed_chunks: 0, strategies_found: 0, error_message: '' },
+        ],
+      }, mount);
+      expect(mount.innerHTML).toContain('Book One');
+      expect(mount.innerHTML).toContain('Book Two');
+      expect((mount.innerHTML.match(/book-row"/g) || []).length).toBe(2);
+    });
+  });
+});
+
+// 2026-08-28: once a handful of books finish, a flat list buries whatever's
+// still active. Finished books collapse into a native <details>, active
+// ones stay in the always-visible list.
+describe('renderBooksPanel finished-books collapsible section (2026-08-28)', () => {
+  const DONE_BOOK = { id: 1, title: 'Finished Book', filename: 'f.pdf', status: 'done', total_chunks: 10, processed_chunks: 10, strategies_found: 2, error_message: '' };
+  const ACTIVE_BOOK = { id: 2, title: 'Active Book', filename: 'a.pdf', status: 'processing', total_chunks: 10, processed_chunks: 3, strategies_found: 0, error_message: '' };
+
+  test('a done book is wrapped in the collapsible finished-books section', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderBooksPanel({ positions: [], alerts: [], books: [DONE_BOOK] }, mount);
+      expect(mount.innerHTML).toContain('books-done-section');
+      expect(mount.innerHTML).toContain('1 finished book<');
+      expect(mount.innerHTML).toContain('Finished Book');
+    });
+  });
+
+  test('an active book is not inside the collapsible section', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderBooksPanel({ positions: [], alerts: [], books: [ACTIVE_BOOK] }, mount);
+      expect(mount.innerHTML).not.toContain('books-done-section');
+      expect(mount.innerHTML).toContain('Active Book');
+    });
+  });
+
+  test('active and done books both render, done ones only inside the collapsible section', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderBooksPanel({ positions: [], alerts: [], books: [DONE_BOOK, ACTIVE_BOOK] }, mount);
+      expect(mount.innerHTML).toContain('Active Book');
+      expect(mount.innerHTML).toContain('Finished Book');
+      expect((mount.innerHTML.match(/book-row"/g) || []).length).toBe(2);
+      // Finished Book's row must appear AFTER the <details> opening tag,
+      // Active Book's must appear BEFORE it -- confirms which section each landed in.
+      const detailsIdx = mount.innerHTML.indexOf('books-done-section');
+      expect(mount.innerHTML.indexOf('Active Book')).toBeLessThan(detailsIdx);
+      expect(mount.innerHTML.indexOf('Finished Book')).toBeGreaterThan(detailsIdx);
+    });
+  });
+
+  test('multiple finished books share one summary count', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      const second = { ...DONE_BOOK, id: 3, title: 'Second Finished Book' };
+      TradingPanel.renderBooksPanel({ positions: [], alerts: [], books: [DONE_BOOK, second] }, mount);
+      expect(mount.innerHTML).toContain('2 finished books<');
+    });
+  });
+
+  test('no finished books yet -- no collapsible section rendered at all', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderBooksPanel({ positions: [], alerts: [], books: [ACTIVE_BOOK] }, mount);
+      expect(mount.innerHTML).not.toContain('finished book');
+    });
+  });
+});
+
+describe('renderTradingUpdate no longer embeds the Books section (2026-08-27)', () => {
+  test('the Strategies mount has no books UI even when books are present', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradingUpdate({
+        positions: [], alerts: [],
+        books: [{ id: 1, title: 'Market Wizards', filename: 'wiz.pdf', status: 'done', total_chunks: 10, processed_chunks: 10, strategies_found: 3, error_message: '' }],
+      }, mount);
+      expect(mount.innerHTML).not.toContain('books-file-input');
+      expect(mount.innerHTML).not.toContain('Market Wizards');
+    });
+  });
+
+  test('renders normally alongside a populated strategy list', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradingUpdate({ positions: TWO_STRATEGIES, alerts: [] }, mount);
+      expect(mount.innerHTML).toContain('MA cross A');
+    });
+  });
+});
+
+describe('buildUploadBookEvent (2026-08-26)', () => {
+  test('builds the real upload_book call_tool shape', () => {
+    expect(TradingPanel.buildUploadBookEvent('wizards.pdf', 'YWJj')).toEqual({
+      type: 'call_tool',
+      data: { name: 'upload_book', args: { filename: 'wizards.pdf', data_base64: 'YWJj' } },
+    });
+  });
+
+  test('an explicit title is included; omitted defaults server-side', () => {
+    expect(TradingPanel.buildUploadBookEvent('wizards.pdf', 'YWJj', 'Market Wizards')).toEqual({
+      type: 'call_tool',
+      data: { name: 'upload_book', args: { filename: 'wizards.pdf', data_base64: 'YWJj', title: 'Market Wizards' } },
+    });
+  });
+});
+
+describe('buildStopBookEvent / buildRetryBookEvent / buildDeleteBookEvent (2026-08-26)', () => {
+  test('stop_book carries the book id', () => {
+    expect(TradingPanel.buildStopBookEvent(7)).toEqual({
+      type: 'call_tool', data: { name: 'stop_book', args: { book_id: 7 } },
+    });
+  });
+
+  test('retry_book carries the book id', () => {
+    expect(TradingPanel.buildRetryBookEvent(7)).toEqual({
+      type: 'call_tool', data: { name: 'retry_book', args: { book_id: 7 } },
+    });
+  });
+
+  test('resume_book carries the book id', () => {
+    expect(TradingPanel.buildResumeBookEvent(7)).toEqual({
+      type: 'call_tool', data: { name: 'resume_book', args: { book_id: 7 } },
+    });
+  });
+
+  test('delete_book carries the book id', () => {
+    expect(TradingPanel.buildDeleteBookEvent(7)).toEqual({
+      type: 'call_tool', data: { name: 'delete_book', args: { book_id: 7 } },
+    });
+  });
+});
+
+describe('buildStartDiscoveryEvent / buildStopDiscoveryEvent (S31/#896)', () => {
+  test('start with a duration includes duration_hours', () => {
+    expect(TradingPanel.buildStartDiscoveryEvent(2.5)).toEqual({
+      type: 'call_tool', data: { name: 'start_discovery', args: { duration_hours: 2.5 } },
+    });
+  });
+
+  test('start with no duration omits duration_hours entirely (indefinite)', () => {
+    expect(TradingPanel.buildStartDiscoveryEvent(null)).toEqual({
+      type: 'call_tool', data: { name: 'start_discovery', args: {} },
+    });
+  });
+
+  test('stop sends stop_discovery with no args', () => {
+    expect(TradingPanel.buildStopDiscoveryEvent()).toEqual({
+      type: 'call_tool', data: { name: 'stop_discovery', args: {} },
+    });
+  });
+});
+
+describe('buildStrategyEditEvent (the Save button\'s real event shape)', () => {
+  test('sends strategy_edit with the strategy name, new code, and its version', () => {
+    const event = TradingPanel.buildStrategyEditEvent(
+      { name: 'MA cross A', version: 2 }, 'def strategy(data):\n    return [1, 0]\n'
+    );
+    expect(event).toEqual({
+      type: 'strategy_edit',
+      data: {
+        strategy_name: 'MA cross A',
+        code: 'def strategy(data):\n    return [1, 0]\n',
+        version: 2,
+      },
+    });
+  });
+});
+
+describe('buildRunGauntletEvent (the create-strategy form\'s real event shape)', () => {
+  const BASE_FIELDS = { symbol: 'AAPL', hypothesis: 'MA cross beats buy-and-hold' };
+
+  test('code source: reuses the generic call_tool WS route with run_gauntlet', () => {
+    const event = TradingPanel.buildRunGauntletEvent({
+      ...BASE_FIELDS, source: 'code', code: 'def strategy(data):\n    return [1]\n',
+    });
+    expect(event).toEqual({
+      type: 'call_tool',
+      data: {
+        name: 'run_gauntlet',
+        args: {
+          symbol: 'AAPL',
+          hypothesis: 'MA cross beats buy-and-hold',
+          code: 'def strategy(data):\n    return [1]\n',
+        },
+      },
+    });
+  });
+
+  test('claim source: sends claim, not code/url/book', () => {
+    const event = TradingPanel.buildRunGauntletEvent({
+      ...BASE_FIELDS, source: 'claim', claim: 'Buy when RSI crosses 30',
+    });
+    expect(event.data.args).toEqual({
+      symbol: 'AAPL', hypothesis: 'MA cross beats buy-and-hold',
+      claim: 'Buy when RSI crosses 30',
+    });
+  });
+
+  test('url source: sends url only', () => {
+    const event = TradingPanel.buildRunGauntletEvent({
+      ...BASE_FIELDS, source: 'url', url: 'https://example.com/strategy',
+    });
+    expect(event.data.args).toEqual({
+      symbol: 'AAPL', hypothesis: 'MA cross beats buy-and-hold',
+      url: 'https://example.com/strategy',
+    });
+  });
+
+  test('book source: sends both book and chapter', () => {
+    const event = TradingPanel.buildRunGauntletEvent({
+      ...BASE_FIELDS, source: 'book', book: 'Market Wizards', chapter: '3',
+    });
+    expect(event.data.args).toEqual({
+      symbol: 'AAPL', hypothesis: 'MA cross beats buy-and-hold',
+      book: 'Market Wizards', chapter: '3',
+    });
+  });
+
+  test('optional provenance is included only when given', () => {
+    const withProv = TradingPanel.buildRunGauntletEvent({
+      ...BASE_FIELDS, source: 'code', code: 'x', provenance: 'user, verbatim',
+    });
+    expect(withProv.data.args.provenance).toBe('user, verbatim');
+
+    const withoutProv = TradingPanel.buildRunGauntletEvent({
+      ...BASE_FIELDS, source: 'code', code: 'x',
+    });
+    expect(withoutProv.data.args.provenance).toBeUndefined();
+  });
+});
+
+// S29 (#892), decisions #48-#51 -- Trading pane "Tickers" sub-tab.
+// renderTickersUpdate calls mount.querySelectorAll/querySelector to wire
+// canvas charts + hover, same as renderTradingUpdate above -- reuses this
+// file's own fakeInteractiveMount() so those calls no-op instead of
+// throwing; canvas drawing itself needs a real 2D context this suite
+// doesn't have, so only the innerHTML string (stage text, badges, names)
+// is asserted, matching this file's established style.
+
+describe('initTickersView', () => {
+  test('shows a loading placeholder in the tickers mount', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      global.document.getElementById = (id) => (id === 'trading-tickers-mount' ? mount : null);
+      TradingPanel.initTickersView();
+      expect(mount.innerHTML).toContain('Loading tickers');
+    });
+  });
+});
+
+describe('renderTickersUpdate', () => {
+  test('no tickers renders the empty state', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTickersUpdate({ tickers: [] }, mount);
+      expect(mount.innerHTML).toContain('No tickers in play yet');
+    });
+  });
+
+  test('a screened ticker (no strategy yet) shows its own status, not a chart', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTickersUpdate({
+        tickers: [{ symbol: 'NVDA', stage: 'screened', strategies: [] }],
+      }, mount);
+      expect(mount.innerHTML).toContain('NVDA');
+      expect(mount.innerHTML).toContain('Screened');
+      expect(mount.innerHTML).toContain('no strategy yet');
+      expect(mount.innerHTML).not.toContain('trd-ticker-canvas');
+    });
+  });
+
+  test('a rejected ticker (S30/#894) shows its gauntlet reason, not the generic screened text', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTickersUpdate({
+        tickers: [{
+          symbol: 'NVDA', stage: 'rejected', strategies: [],
+          reason: 'vs_benchmark: underperformed by 3.2%',
+        }],
+      }, mount);
+      expect(mount.innerHTML).toContain('NVDA');
+      expect(mount.innerHTML).toContain('Rejected');
+      expect(mount.innerHTML).toContain('vs_benchmark: underperformed by 3.2%');
+      expect(mount.innerHTML).not.toContain('no strategy yet');
+      expect(mount.innerHTML).not.toContain('trd-ticker-canvas');
+    });
+  });
+
+  test('a validated strategy with zero fills shows "awaiting first paper trade", not a chart', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTickersUpdate({
+        tickers: [{
+          symbol: 'AAPL', stage: 'validated',
+          strategies: [{ name: 'ma-cross', status: 'paper', segments: [] }],
+        }],
+      }, mount);
+      expect(mount.innerHTML).toContain('ma-cross');
+      expect(mount.innerHTML).toContain('>PAPER<');
+      expect(mount.innerHTML).toContain('awaiting first paper trade');
+      expect(mount.innerHTML).not.toContain('trd-ticker-canvas');
+    });
+  });
+
+  test('a charting ticker renders one canvas per phase segment', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTickersUpdate({
+        tickers: [{
+          symbol: 'AAPL', stage: 'charting',
+          strategies: [{
+            name: 'ma-cross', status: 'live',
+            segments: [
+              { phase: 'paper', points: [{ ts: '2026-01-01T00:00:00', equity: 0, side: 'buy', pnl: 0, price: 100, strategy: 'ma-cross' }], benchmark: [] },
+              { phase: 'live', points: [{ ts: '2026-01-05T00:00:00', equity: 2, side: 'buy', pnl: 2, price: 110, strategy: 'ma-cross' }], benchmark: [] },
+            ],
+          }],
+        }],
+      }, mount);
+      expect(mount.innerHTML).toContain('trd-ticker-canvas-0-0-0');
+      expect(mount.innerHTML).toContain('trd-ticker-canvas-0-0-1');
+      expect(mount.innerHTML).toContain('PAPER vs. buy-and-hold');
+      expect(mount.innerHTML).toContain('LIVE vs. buy-and-hold');
+    });
+  });
+
+  test('multiple strategies on the same ticker all appear on one card', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTickersUpdate({
+        tickers: [{
+          symbol: 'AAPL', stage: 'validated',
+          strategies: [
+            { name: 'strategy-one', status: 'paper', segments: [] },
+            { name: 'strategy-two', status: 'paper', segments: [] },
+          ],
+        }],
+      }, mount);
+      expect(mount.innerHTML).toContain('strategy-one');
+      expect(mount.innerHTML).toContain('strategy-two');
+      // one card, not two -- both strategies nested under the single AAPL header
+      expect((mount.innerHTML.match(/trd-ticker-card/g) || []).length).toBe(1);
+    });
+  });
+});
+
+// S35 (#911/#912): Overview sub-tab -- one multi-line graph across every
+// strategy, each line hoverable for status + total gain/loss, plus a
+// grand total near the graph.
+describe('renderOverviewPanel (S35/#911/#912)', () => {
+  const TWO_STRATEGIES_WITH_CURVES = [
+    { name: 'MA cross A', status: 'paper', equity_curve: [0, 5, 3, 8] },
+    { name: 'MA cross B', status: 'live', equity_curve: [0, -2, -5] },
+  ];
+
+  test('no strategies yet renders the empty state, not a crash', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderOverviewPanel({ positions: [], total_pnl: 0 }, mount);
+      expect(mount.innerHTML).toContain('No active strategies yet');
+    });
+  });
+
+  test('missing data entirely renders the empty state, not a crash', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderOverviewPanel(null, mount);
+      expect(mount.innerHTML).toContain('No active strategies yet');
+    });
+  });
+
+  test('renders a canvas + a legend entry per strategy', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderOverviewPanel({ positions: TWO_STRATEGIES_WITH_CURVES, total_pnl: 3 }, mount);
+      expect(mount.innerHTML).toContain('trd-overview-canvas');
+      expect(mount.innerHTML).toContain('MA cross A');
+      expect(mount.innerHTML).toContain('MA cross B');
+      expect((mount.innerHTML.match(/trd-overview-legend-item/g) || []).length).toBe(2);
+    });
+  });
+
+  test('renders the real total_pnl value, positive shown distinctly from negative', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderOverviewPanel({ positions: TWO_STRATEGIES_WITH_CURVES, total_pnl: 42.5 }, mount);
+      expect(mount.innerHTML).toContain('$42.50');
+      expect(mount.innerHTML).toContain('positive');
+    });
+  });
+
+  test('a negative total_pnl renders distinctly from positive', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderOverviewPanel({ positions: TWO_STRATEGIES_WITH_CURVES, total_pnl: -12.3 }, mount);
+      expect(mount.innerHTML).toContain('$-12.30');
+      expect(mount.innerHTML).toContain('negative');
+    });
+  });
+
+  test('missing total_pnl (backend not landed yet) renders a placeholder, not a crash', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderOverviewPanel({ positions: TWO_STRATEGIES_WITH_CURVES }, mount);
+      expect(mount.innerHTML).toContain('—');
+    });
+  });
+
+  test('a strategy with an empty equity_curve is skipped, not a crash', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderOverviewPanel({
+        positions: [{ name: 'no fills yet', status: 'paper', equity_curve: [] }],
+        total_pnl: 0,
+      }, mount);
+      expect(mount.innerHTML).toContain('trd-overview-canvas');
+      expect(mount.innerHTML).not.toContain('no fills yet');
+    });
+  });
+
+  // S35c/d: by-stock section, additive to the by-strategy one above.
+  describe('by-stock section', () => {
+    test('missing all_fills (backend not landed yet) shows a placeholder, not a crash', () => {
+      withFakeDocument(() => {
+        const mount = fakeInteractiveMount();
+        TradingPanel.renderOverviewPanel({ positions: TWO_STRATEGIES_WITH_CURVES, total_pnl: 3 }, mount);
+        expect(mount.innerHTML).toContain('By Stock');
+        expect(mount.innerHTML).toContain('not available yet');
+      });
+    });
+
+    test('empty all_fills shows "No fills yet", not a crash', () => {
+      withFakeDocument(() => {
+        const mount = fakeInteractiveMount();
+        TradingPanel.renderOverviewPanel({ positions: TWO_STRATEGIES_WITH_CURVES, total_pnl: 3, all_fills: [] }, mount);
+        expect(mount.innerHTML).toContain('No fills yet');
+      });
+    });
+
+    test('groups fills by symbol into one line + legend entry each', () => {
+      withFakeDocument(() => {
+        const mount = fakeInteractiveMount();
+        TradingPanel.renderOverviewPanel({
+          positions: TWO_STRATEGIES_WITH_CURVES, total_pnl: 3,
+          all_fills: [
+            { symbol: 'AAPL', pnl: 5 },
+            { symbol: 'TSLA', pnl: -2 },
+            { symbol: 'AAPL', pnl: 3 },
+          ],
+        }, mount);
+        expect(mount.innerHTML).toContain('trd-overview-canvas-symbol');
+        expect(mount.innerHTML).toContain('AAPL');
+        expect(mount.innerHTML).toContain('TSLA');
+        expect((mount.innerHTML.match(/trd-overview-legend-item/g) || []).length).toBe(4); // 2 strategies + 2 symbols
+      });
+    });
+  });
+
+  // S37 (#920/#922-925): Reset button + collapsible archive history.
+  describe('reset button + archive history', () => {
+    test('a Reset button is always rendered, even with no strategies yet', () => {
+      withFakeDocument(() => {
+        const mount = fakeInteractiveMount();
+        TradingPanel.renderOverviewPanel({ positions: [], total_pnl: 0 }, mount);
+        expect(mount.innerHTML).toContain('trd-overview-reset-btn');
+      });
+    });
+
+    test('no paper_archives shows "No past resets yet", not a crash', () => {
+      withFakeDocument(() => {
+        const mount = fakeInteractiveMount();
+        TradingPanel.renderOverviewPanel({ positions: TWO_STRATEGIES_WITH_CURVES, total_pnl: 3 }, mount);
+        expect(mount.innerHTML).toContain('No past resets yet');
+      });
+    });
+
+    test('renders one summary row per archive with its P&L and trade count', () => {
+      withFakeDocument(() => {
+        const mount = fakeInteractiveMount();
+        TradingPanel.renderOverviewPanel({
+          positions: TWO_STRATEGIES_WITH_CURVES, total_pnl: 3,
+          paper_archives: [
+            { id: 2, reset_at: '2026-08-28T20:00:00Z', total_pnl: -41.42, trade_count: 788, date_range_start: '2026-08-01', date_range_end: '2026-08-28' },
+            { id: 1, reset_at: '2026-08-20T10:00:00Z', total_pnl: 10.5, trade_count: 5, date_range_start: '2026-08-15', date_range_end: '2026-08-20' },
+          ],
+        }, mount);
+        expect(mount.innerHTML).toContain('data-archive-toggle="2"');
+        expect(mount.innerHTML).toContain('data-archive-toggle="1"');
+        expect(mount.innerHTML).toContain('788 trades');
+        expect(mount.innerHTML).toContain('$-41.42');
+        expect(mount.innerHTML).toContain('$10.50');
+      });
+    });
+  });
+
+  describe('receiveArchiveFills', () => {
+    // Click-driven wiring (_wireOverviewControls) isn't exercised by this
+    // suite -- consistent with every other confirm()-guarded button here
+    // (halt/delete strategy have no click-simulation tests either); verify
+    // those by hand in the app. This just guards the one edge case a stray
+    // or duplicate tool_result could hit.
+    test('a tool_result with no pending request does not throw', () => {
+      expect(() => TradingPanel.receiveArchiveFills([{ symbol: 'AAPL' }])).not.toThrow();
+    });
+  });
+});
+
+// Trade Log sub-tab (user-requested 2026-08-28, same day as Overview):
+// searchable/filterable fill history, split into Paper and Live sections.
+describe('renderTradeLog', () => {
+  const SAMPLE_FILLS = [
+    { timestamp: '2026-08-27T10:00:00Z', symbol: 'AAPL', side: 'buy', qty: 1, price: 150, fees: 0.15, pnl: 0, phase: 'paper', strategy_id: 'strat-a' },
+    { timestamp: '2026-08-27T11:00:00Z', symbol: 'AAPL', side: 'sell', qty: 1, price: 155, fees: 0.16, pnl: 4.7, phase: 'paper', strategy_id: 'strat-a' },
+    { timestamp: '2026-08-27T12:00:00Z', symbol: 'TSLA', side: 'buy', qty: 2, price: 200, fees: 0.4, pnl: 0, phase: 'paper', strategy_id: 'strat-b' },
+    { timestamp: '2026-08-27T13:00:00Z', symbol: 'MSFT', side: 'buy', qty: 1, price: 300, fees: 0.3, pnl: -2.1, phase: 'live', strategy_id: 'strat-a' },
+  ];
+
+  test('missing all_fills (backend not landed yet) shows a placeholder, not a crash', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradeLog({ positions: [] }, mount);
+      expect(mount.innerHTML).toContain('not available yet');
+    });
+  });
+
+  test('splits fills into Paper and Live sections by phase', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradeLog({ all_fills: SAMPLE_FILLS }, mount);
+      expect(mount.innerHTML).toContain('Paper Trades');
+      expect(mount.innerHTML).toContain('Live Trades');
+      expect(mount.innerHTML).toContain('trd-log-search');
+      expect(mount.innerHTML).toContain('trd-log-strategy-filter');
+      expect(mount.innerHTML).toContain('trd-log-symbol-filter');
+    });
+  });
+
+  test('empty all_fills renders both sections with no crash', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradeLog({ all_fills: [] }, mount);
+      expect(mount.innerHTML).toContain('Paper Trades');
+      expect(mount.innerHTML).toContain('Live Trades');
+    });
+  });
+
+  test('filters rows by strategy/symbol/search (unit-level, not DOM-driven)', () => {
+    const paper = SAMPLE_FILLS.filter((f) => f.phase === 'paper');
+    const bySymbol = paper.filter((f) => f.symbol === 'TSLA');
+    expect(bySymbol.length).toBe(1);
+    expect(bySymbol[0].strategy_id).toBe('strat-b');
+  });
+
+  // Paper/Live sub-tabs (2026-09-08): Paper starts active, Live starts
+  // hidden -- checkable via the initial skeleton's own innerHTML string,
+  // no querySelector/click-simulation needed (this suite's fake mount
+  // can't support that -- see the confirm()-guarded-button precedent
+  // above; real click-driven switching is verified by hand in the app).
+  test('Paper section starts visible, Live section starts hidden', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradeLog({ all_fills: SAMPLE_FILLS }, mount);
+      const paperIdx = mount.innerHTML.indexOf('data-log-section="paper"');
+      const liveIdx = mount.innerHTML.indexOf('data-log-section="live"');
+      const paperTag = mount.innerHTML.slice(paperIdx, paperIdx + 60);
+      const liveTag = mount.innerHTML.slice(liveIdx, liveIdx + 60);
+      expect(paperTag).not.toContain('hidden');
+      expect(liveTag).toContain('hidden');
+    });
+  });
+
+  test('sortable column headers carry data-sort-key, including the new PnL % column', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      TradingPanel.renderTradeLog({ all_fills: SAMPLE_FILLS }, mount);
+      ['time', 'symbol', 'side', 'qty', 'price', 'fees', 'pnl', 'pnl_pct', 'strategy_id'].forEach((key) => {
+        expect(mount.innerHTML).toContain(`data-sort-key="${key}"`);
+      });
+      expect(mount.innerHTML).toContain('>PnL %<');
+    });
+  });
+
+  // Doesn't crash wiring the new sub-tab click listener against this
+  // suite's weak fake (querySelector always returns null) -- this is the
+  // regression the 2026-09-08 self_dev PR actually introduced: an
+  // unguarded mount.querySelector('.trd-log-subtabs').addEventListener(...)
+  // threw here before the null-check fix.
+  test('renders without throwing against a mount whose querySelector returns null', () => {
+    withFakeDocument(() => {
+      const mount = fakeInteractiveMount();
+      expect(() => TradingPanel.renderTradeLog({ all_fills: SAMPLE_FILLS }, mount)).not.toThrow();
+    });
+  });
+});

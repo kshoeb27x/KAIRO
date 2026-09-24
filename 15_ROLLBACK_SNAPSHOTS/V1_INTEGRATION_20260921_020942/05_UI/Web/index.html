@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>KAIRO V1</title>
+
+    <link rel="stylesheet" href="/style.css">
+</head>
+
+<body>
+
+<div class="app">
+
+    <header class="topbar">
+        <div class="brand">
+            <div class="logo">K</div>
+
+            <div>
+                <h1>KAIRO</h1>
+                <span>AI SYSTEM • V1</span>
+            </div>
+        </div>
+
+        <div class="system-state">
+            <span class="dot"></span>
+            SYSTEM ONLINE
+        </div>
+    </header>
+
+
+    <main class="layout">
+
+        <aside class="sidebar">
+
+            <div class="nav-title">SYSTEM</div>
+
+            <button class="nav active">🧠 Core</button>
+            <button class="nav">🤖 Agents</button>
+            <button class="nav">📊 Data</button>
+            <button class="nav">🔧 Tools</button>
+            <button class="nav">💻 Coding</button>
+            <button class="nav">📈 Trading</button>
+            <button class="nav">🔬 Research</button>
+            <button class="nav">⚙️ Runtime</button>
+
+            <div class="nav-title security-title">SECURITY</div>
+
+            <button class="nav">🔐 Security</button>
+
+        </aside>
+
+
+        <section class="main">
+
+            <div class="page-header">
+                <div>
+                    <h2>KAIRO CONSOLE</h2>
+                    <p>Central AI system interface</p>
+                </div>
+
+                <div class="version">
+                    V1.0
+                </div>
+            </div>
+
+
+            <div class="dashboard">
+
+                <div class="card">
+                    <span class="card-label">CORE</span>
+                    <strong id="core-status">ONLINE</strong>
+                </div>
+
+                <div class="card">
+                    <span class="card-label">SECURITY</span>
+                    <strong id="security-status">ACTIVE</strong>
+                </div>
+
+                <div class="card">
+                    <span class="card-label">MODE</span>
+                    <strong id="mode-status">DEVELOPMENT</strong>
+                </div>
+
+                <div class="card">
+                    <span class="card-label">VERSION</span>
+                    <strong id="version-status">V1</strong>
+                </div>
+
+            </div>
+
+
+            <div class="console">
+
+                <div class="console-header">
+                    <span>CONVERSATION</span>
+                    <span id="connection">CONNECTED</span>
+                </div>
+
+                <div id="messages" class="messages">
+
+                    <div class="message kairo">
+                        <div class="message-name">KAIRO</div>
+                        <div>
+                            KAIRO V1 is online. System initialized.
+                        </div>
+                    </div>
+
+                </div>
+
+
+                <div class="input-area">
+
+                    <input
+                        id="command"
+                        type="text"
+                        placeholder="Enter command or question..."
+                        autocomplete="off"
+                    >
+
+                    <button id="send">
+                        SEND
+                    </button>
+
+                </div>
+
+            </div>
+
+        </section>
+
+    </main>
+
+
+    <footer>
+
+        <span>CORE: ONLINE</span>
+        <span>SECURITY: ACTIVE</span>
+        <span>NETWORK: LOCAL</span>
+        <span>ENV: DEVELOPMENT</span>
+
+    </footer>
+
+</div>
+
+
+<script src="/app.js"></script>
+
+</body>
+</html>

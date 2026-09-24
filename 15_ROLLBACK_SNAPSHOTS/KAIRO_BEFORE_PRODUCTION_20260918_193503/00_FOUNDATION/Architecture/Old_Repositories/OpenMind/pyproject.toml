@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openmind-cerebral"
+version = "0.1.0"
+description = "Cerebral — the central Python backend for OpenMind / Felix"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [{ name = "OpenMind" }]
+
+# Runtime dependencies — kept in sync with the contents of
+# cerebral/requirements.txt (now a pointer; see that file).
+dependencies = [
+    "websockets>=12.0",
+    "chromadb>=1.5.0",
+    "vosk>=0.3.45",
+    "faster-whisper>=1.0.0",
+    "sounddevice>=0.4.6",
+    "numpy>=1.24.0",
+    "kokoro>=0.9.4",
+    "soundfile>=0.12.0",
+    "httpx>=0.27.0",
+    "psutil>=5.9.0",
+    "pyperclip>=1.8.0",
+    "feedparser>=6.0",
+    "pytesseract>=0.3.10",
+    "pdf2image>=1.17.0",
+    "Pillow>=10.0.0",
+    "keyring>=24.0",
+    "mcp>=1.26.0",
+    "playwright>=1.58",
+    "pypdf>=4.0",
+    "mobi>=0.4",  # book ingestion: extracts .mobi/.azw3 to epub/html for text extraction
+    "anthropic>=0.83",
+    "python-jobspy>=1.1",  # B4 #511: big-board search (LinkedIn/Indeed/Glassdoor); lazy-imported
+    "PyYAML>=6.0",  # S1 #537: SKILL.md front-matter parsing (skills subsystem, ADR-0014)
+    "pandas>=2.0",  # S1a #831: trading_data OHLCV DataFrames
+    "yfinance>=0.2",  # S1a #831: trading_data OHLCV source
+    "alpaca-py>=0.33.0",  # S21 #874: live/paper broker execution
+    # computer_use (ADR-0016) _WindowsBackend deps -- Windows-only, so gated.
+    # Absent, _make_default_backend() swallows the ImportError and every tool
+    # returns "not available on this platform" with no obvious cause.
+    "pyautogui>=0.9.54; sys_platform == 'win32'",
+    "mss>=9.0.0; sys_platform == 'win32'",
+    "uiautomation>=2.0.18; sys_platform == 'win32'",
+    "keyboard>=0.13.5; sys_platform == 'win32'",  # F11+F12 kill-switch leg (S2)
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0",
+    "pytest-asyncio>=1.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cerebral*"]
+exclude = ["cerebral.tests*"]
+
+# Mirror of cerebral/pytest.ini so `python -m pytest` run from the repo root
+# resolves to this config (rootdir C:\OpenMind) with the SAME asyncio_mode the
+# async suite was written for. Without this, a root-level run picks pyproject.toml
+# as the config file in STRICT mode and every bare `async def` test errors with
+# "async def functions are not natively supported" (~400 false failures).
+# cerebral/pytest.ini still wins when pytest is invoked from inside cerebral/.
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["cerebral/tests"]
+markers = [
+    "integration: requires live services (Ollama, OpenClaw); skipped in CI by default",
+]

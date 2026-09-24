@@ -1,0 +1,17 @@
+{
+  "created_at": "2026-09-19T16:10:35.946274",
+  "files": [
+    {
+      "file": "01_CORE\\Engineering\\engineering_runner.py",
+      "sha256": "c3c3ade6a580d88c71a5bcc321f7b7344afc4d5e61939b90735ea05b8b620ec0"
+    },
+    {
+      "file": "01_CORE\\Engineering\\__init__.py",
+      "sha256": "6c07d2b532281e68e809407abb359d5fa5eca9be9c8c20dbb708d704e0a5648b"
+    },
+    {
+      "file": "01_CORE\\Engineering\\__pycache__\\engineering_runner.cpython-312.pyc",
+      "sha256": "dde81c3f45ca5c952558dea1d2e0be767e153195846511182ddfd126d072a728"
+    }
+  ]
+}

@@ -1,0 +1,634 @@
+import { useState, useEffect, useCallback } from 'react';
+import { Bot, Plus, Trash2, Link, Loader2, RefreshCw, Edit3, Check, X, AlertCircle, FileText, ChevronDown, ChevronUp, Save, ShoppingBag, Share2, Sparkles } from 'lucide-react';
+import { useI18n } from '../lib/i18n';
+import { useAppConfig } from '../lib/store';
+import AgentWizard from '../components/AgentWizard';
+import AgentAvatar from '../components/AgentAvatar';
+import AgentEmojiPicker from '../components/AgentEmojiPicker';
+import AgentMarketplace from './AgentMarketplace';
+import ShareAgentForm from '../components/ShareAgentForm';
+
+interface AgentInfo {
+  id: string;
+  name?: string;
+  emoji?: string;
+  model?: string;
+  bindings?: string[];
+  isDefault?: boolean;
+  workspace?: string;
+  routes?: string[];
+}
+
+const WORKSPACE_FILE_META: Record<string, string> = {
+  'SOUL.md': 'agents.file.soul.desc',
+  'TOOLS.md': 'agents.file.tools.desc',
+  'IDENTITY.md': 'agents.file.identity.desc',
+  'USER.md': 'agents.file.user.desc',
+  'MEMORY.md': 'agents.file.memory.desc',
+  'AGENTS.md': 'agents.file.agents.desc',
+  'HEARTBEAT.md': 'agents.file.heartbeat.desc',
+};
+
+import type { Page } from '../components/Sidebar';
+
+export default function Agents({ onNavigate }: { onNavigate?: (page: Page) => void } = {}) {
+  const { t } = useI18n();
+  const { updateConfig } = useAppConfig();
+  const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Wizard state
+  const [showWizard, setShowWizard] = useState(false);
+
+  // F-063 Marketplace overlay
+  const [showMarketplace, setShowMarketplace] = useState(false);
+  // F-063 0.4.0: share modal state (per-agent)
+  const [shareAgentId, setShareAgentId] = useState<string | null>(null);
+
+  // Identity editing
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editEmoji, setEditEmoji] = useState('');
+  const [editAvatar, setEditAvatar] = useState('');
+  const [editTheme, setEditTheme] = useState('');
+
+  // Binding
+  // Channel routing is no longer managed here — it lives in the Channels page via
+  // a per-channel "Replied by" dropdown. An agent card just shows WHICH channels
+  // currently route to it (read-only), see agent.bindings display below.
+
+  // Workspace file editing
+  const [fileEditAgentId, setFileEditAgentId] = useState<string | null>(null);
+  const [workspaceFiles, setWorkspaceFiles] = useState<string[]>([]);
+  const [activeFile, setActiveFile] = useState('');
+  const [fileContent, setFileContent] = useState('');
+  const [fileOriginal, setFileOriginal] = useState('');
+  const [fileListLoading, setFileListLoading] = useState(false);
+  const [fileLoading, setFileLoading] = useState(false);
+  const [fileSaving, setFileSaving] = useState(false);
+  const [fileSaved, setFileSaved] = useState(false);
+
+  const loadAgents = async () => {
+    setLoading(true);
+    setError(null);
+    if (!window.electronAPI) {
+      setAgents([{ id: 'main', name: 'Claw', emoji: '🦞', isDefault: true, bindings: [] }]);
+      setLoading(false);
+      return;
+    }
+    try {
+      const result = await (window.electronAPI as any).agentsList();
+      if (result.success) {
+        setAgents(result.agents || []);
+      } else {
+        setError(result.error || t('agents.loadFailed', 'Failed to load agents'));
+      }
+    } catch { setError(t('agents.connectFailed', 'Failed to connect')); }
+    setLoading(false);
+  };
+
+  useEffect(() => { loadAgents(); }, []);
+
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const handleDelete = async (agentId: string) => {
+    if (!window.electronAPI || agentId === 'main') return;
+    if (!confirm(t('agents.deleteConfirm', 'Delete this agent? This will remove its workspace and all data.'))) return;
+    setDeletingId(agentId);
+    setError(null);
+    try {
+      const result = await (window.electronAPI as any).agentsDelete(agentId);
+      if (result.success) loadAgents();
+      else setError(result.error || t('agents.deleteFailed', 'Delete failed'));
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const handleSetIdentity = async (agentId: string) => {
+    if (!window.electronAPI) return;
+    const result = await (window.electronAPI as any).agentsSetIdentity(agentId, editName, editEmoji, editAvatar, editTheme);
+    if (result.success) {
+      setEditingId(null);
+      loadAgents();
+    } else {
+      setError(result.error || t('agents.identityFailed', 'Set identity failed'));
+    }
+  };
+
+  // handleBind / handleUnbind removed 2026-04-08 — channel-to-agent routing is now
+  // managed exclusively on the Channels page via the per-channel "Replied by" dropdown.
+  // This keeps the Agents page focused on identity/workspace/prompts editing only.
+  // Any display of current routing on an agent card is read-only and derived from the
+  // same agents:list bindings[] that the Channels page dropdown writes to.
+
+  // Workspace file editing
+  const loadFile = useCallback(async (agentId: string, fileName: string) => {
+    if (!window.electronAPI) return;
+    setFileLoading(true);
+    setFileSaved(false);
+    try {
+      if (!(window.electronAPI as any).agentsReadFile) {
+        throw new Error(t('agents.fileReadUnavailable', 'This desktop build does not expose agent file reading yet. Please restart with the latest package.'));
+      }
+      const result = await (window.electronAPI as any).agentsReadFile(agentId, fileName);
+      if (result.success) {
+        setFileContent(result.content || '');
+        setFileOriginal(result.content || '');
+      } else {
+        throw new Error(result.error || t('agents.loadFileFailed', 'Failed to load {0}').replace('{0}', fileName));
+      }
+    } catch (err: any) {
+      setFileContent('');
+      setFileOriginal('');
+      setError(err?.message || t('agents.loadFileFailed', 'Failed to load {0}').replace('{0}', fileName));
+    }
+    setFileLoading(false);
+  }, [t]);
+
+  const loadWorkspaceFiles = useCallback(async (agentId: string) => {
+    if (!window.electronAPI) return;
+    setFileListLoading(true);
+    try {
+      if (!(window.electronAPI as any).agentsListFiles) {
+        throw new Error(t('agents.fileListUnavailable', 'This desktop build does not expose dynamic agent workspace files yet. Please restart with the latest package.'));
+      }
+      const result = await (window.electronAPI as any).agentsListFiles(agentId);
+      if (!result?.success) {
+        throw new Error(result?.error || t('agents.filesLoadFailed', 'Failed to load workspace files'));
+      }
+      const files = Array.isArray(result?.files) ? result.files : [];
+      setWorkspaceFiles(files);
+      if (files.length === 0) {
+        setActiveFile('');
+        setFileContent('');
+        setFileOriginal('');
+        return;
+      }
+      const nextFile = files.includes(activeFile) ? activeFile : files[0];
+      setActiveFile(nextFile);
+      await loadFile(agentId, nextFile);
+    } catch (err: any) {
+      setWorkspaceFiles([]);
+      setActiveFile('');
+      setFileContent('');
+      setFileOriginal('');
+      setError(err?.message || t('agents.filesLoadFailed', 'Failed to load workspace files'));
+    } finally {
+      setFileListLoading(false);
+    }
+  }, [activeFile, loadFile, t]);
+
+  const handleOpenFiles = (agentId: string) => {
+    if (fileEditAgentId === agentId) {
+      setFileEditAgentId(null);
+      setWorkspaceFiles([]);
+      setActiveFile('');
+      return;
+    }
+    setFileEditAgentId(agentId);
+    void loadWorkspaceFiles(agentId);
+  };
+
+  const handleSaveFile = async () => {
+    if (!window.electronAPI || !fileEditAgentId) return;
+    setFileSaving(true);
+    try {
+      const result = await (window.electronAPI as any).agentsWriteFile(fileEditAgentId, activeFile, fileContent);
+      if (result.success) {
+        setFileOriginal(fileContent);
+        setFileSaved(true);
+        setTimeout(() => setFileSaved(false), 2000);
+      } else {
+        setError(result.error || t('agents.saveFailed', 'Save failed'));
+      }
+    } catch {
+      setError(t('agents.fileSaveFailed', 'Failed to save file'));
+    }
+    setFileSaving(false);
+  };
+
+  const fileDirty = fileContent !== fileOriginal;
+
+  // F-063: If marketplace overlay is open, render it full-bleed.
+  if (showMarketplace) {
+    return (
+      <AgentMarketplace
+        onClose={() => setShowMarketplace(false)}
+        onInstalled={() => { loadAgents(); }}
+      />
+    );
+  }
+
+  return (
+    <div className="h-full flex flex-col relative z-0">
+      {/* Header */}
+      <div className="px-8 py-6 border-b border-white/[0.04] bg-slate-950/20">
+        <div className="flex items-center justify-between mb-1">
+          <div>
+            <h1 className="text-xl font-bold tracking-tight text-white mb-1">🤖 {t('agents.title')}</h1>
+            <p className="text-[13px] text-slate-400">{t('agents.subtitle')}</p>
+          </div>
+          <div className="flex items-center gap-2.5">
+            <button onClick={() => setShowMarketplace(true)}
+              className="flex items-center justify-center gap-2 px-4 py-2 text-xs font-semibold uppercase tracking-wider bg-violet-500/20 hover:bg-violet-500/30 text-violet-300 rounded-full transition-colors"
+              title={t('agents.marketplace.title', 'Browse Agent Marketplace')}>
+              <ShoppingBag size={14} />
+              {t('agents.marketplace.entry', '浏览集市')}
+            </button>
+            <button onClick={() => setShowWizard(true)}
+              className="flex items-center justify-center gap-2 px-4 py-2 text-xs font-semibold uppercase tracking-wider bg-brand-500 hover:bg-brand-400 text-white rounded-full transition-colors shadow-sm shadow-brand-500/20">
+              <Plus size={14} />
+              {t('agents.createAgent')}
+            </button>
+            <button onClick={loadAgents} disabled={loading}
+              className="flex items-center justify-center gap-1.5 p-2 text-slate-400 hover:text-white hover:bg-white/10 rounded-full transition-colors">
+              {loading ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-8 space-y-6">
+        {/* Error */}
+        {error && (
+          <div className="flex items-center gap-2 p-3 bg-red-600/10 border border-red-600/20 rounded-xl text-xs text-red-400">
+            <AlertCircle size={14} />
+            <span className="flex-1">{error}</span>
+            <button onClick={() => setError(null)} title={t('common.close', 'Close')} aria-label={t('common.close', 'Close')} className="ml-auto"><X size={12} /></button>
+          </div>
+        )}
+
+        {/* Agent Creation Wizard */}
+        {showWizard && (
+          <AgentWizard
+            onComplete={(agentId) => {
+              setShowWizard(false);
+              loadAgents();
+              // If agentId returned, auto-switch to the new agent and navigate to chat
+              // so the Bootstrap Q&A ritual starts immediately
+              if (agentId && onNavigate) {
+                updateConfig({ selectedAgentId: agentId });
+                // Delay navigation to let config change propagate to Dashboard first
+                setTimeout(() => onNavigate('chat'), 200);
+              }
+            }}
+            onCancel={() => setShowWizard(false)}
+          />
+        )}
+
+        {/* Agent List */}
+        {loading ? (
+          <div className="flex items-center justify-center py-12"><Loader2 size={24} className="animate-spin text-brand-500" /></div>
+        ) : agents.length === 0 ? (
+          <div className="text-center py-12 bg-slate-900/20 rounded-3xl border border-white/[0.04]">
+            <Bot size={32} className="mx-auto mb-4 text-slate-600" />
+            <p className="text-sm font-medium text-slate-300">{t('agents.empty')}</p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {agents.map((agent) => (
+              <div key={agent.id} className="bg-slate-900/60 backdrop-blur-xl border border-white/[0.06] rounded-3xl overflow-hidden hover:border-white/[0.1] hover:bg-slate-900/80 transition-colors">
+                {/* Agent header */}
+                <div className="p-5 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3.5">
+                        <AgentAvatar name={agent.name || agent.id} emoji={agent.emoji} size={40} fallback="logo" className="text-2xl" />
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-base font-semibold text-slate-200">{agent.name || agent.id}</span>
+                          {agent.isDefault && <span className="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider bg-brand-500/20 text-brand-400 rounded-full">{t('agents.default', 'Default')}</span>}
+                        </div>
+                        <div className="text-[11px] text-slate-500 mt-0.5">
+                          {t('agents.idLabel', 'ID')}: {agent.id}{agent.model && <span className="ml-2">{t('agents.modelLabel', 'Model')}: {agent.model}</span>}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button onClick={() => handleOpenFiles(agent.id)}
+                        className={`p-2 rounded-full transition-colors ${fileEditAgentId === agent.id ? 'text-brand-400 bg-brand-500/20 shadow-sm' : 'text-slate-500 hover:text-white hover:bg-white/10'}`}
+                        title={t('agents.editDefinition')}>
+                        <FileText size={16} />
+                      </button>
+                      <button onClick={() => { setEditingId(agent.id); setEditName(agent.name || ''); setEditEmoji(agent.emoji || ''); setEditAvatar(''); setEditTheme(''); }}
+                        className="p-2 text-slate-500 hover:text-white hover:bg-white/10 rounded-full transition-colors" title={t('agents.editIdentity', 'Edit identity')}><Edit3 size={16} /></button>
+                      {/* "Add binding" button removed 2026-04-08 — channel routing is now
+                          managed on the Channels page via per-channel "Replied by" dropdown. */}
+                      {!agent.isDefault && (
+                        <button
+                          onClick={() => setShareAgentId(agent.id)}
+                          title={t('agents.share', '分享到集市')}
+                          aria-label={t('agents.share', '分享到集市')}
+                          className="p-2 rounded-full text-slate-500 hover:text-violet-400 hover:bg-violet-600/10 transition-colors"
+                        >
+                          <Share2 size={16} />
+                        </button>
+                      )}
+                      {!agent.isDefault && (
+                        <button
+                          onClick={() => handleDelete(agent.id)}
+                          disabled={deletingId === agent.id}
+                          title={t('common.delete', 'Delete')}
+                          className="p-2 text-slate-500 hover:text-red-400 hover:bg-red-400/10 rounded-full disabled:opacity-50 transition-colors"
+                        >
+                          {deletingId === agent.id ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Bindings (read-only): which channels currently route to this agent.
+                      Managed exclusively on the Channels page; this is just a status pill. */}
+                  {agent.bindings && agent.bindings.length > 0 && (
+                    <div className="flex flex-wrap gap-2 pl-[3.25rem] -mt-2">
+                      {agent.bindings.map((b, i) => (
+                        <span
+                          key={i}
+                          className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] uppercase tracking-wider font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full"
+                          title={t('agents.bindingReadOnlyHint', 'Manage channel routing on the Channels page')}
+                        >
+                          <Link size={10} />{b}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Inline identity edit */}
+                  {editingId === agent.id && (
+                    <div className="space-y-3 pl-[3.25rem] pt-3 pb-1 border-t border-white/[0.04]">
+                      <AgentEmojiPicker
+                        value={editEmoji}
+                        onChange={setEditEmoji}
+                        size="sm"
+                      />
+                      <div className="flex items-center gap-2.5">
+                        <input value={editEmoji} onChange={(e) => setEditEmoji(e.target.value)} placeholder={t('agents.emojiOptional', 'Optional')}
+                          className="w-12 px-2 py-1.5 bg-slate-950/40 border border-white/[0.08] hover:border-white/[0.12] rounded-xl text-center text-sm focus:outline-none focus:border-brand-500 transition-colors text-slate-200" maxLength={4} />
+                        <input value={editName} onChange={(e) => setEditName(e.target.value)} placeholder={t('agents.namePlaceholder', 'Name')}
+                          className="flex-1 px-3 py-1.5 bg-slate-950/40 border border-white/[0.08] hover:border-white/[0.12] rounded-xl text-sm focus:outline-none focus:border-brand-500 transition-colors text-slate-200" />
+                        <button onClick={() => handleSetIdentity(agent.id)} title={t('common.save', 'Save')} aria-label={t('common.save', 'Save')} className="p-2 bg-brand-500/20 text-brand-400 hover:text-brand-300 hover:bg-brand-500/30 rounded-full transition-colors"><Check size={16} /></button>
+                        <button onClick={() => setEditingId(null)} title={t('common.cancel', 'Cancel')} aria-label={t('common.cancel', 'Cancel')} className="p-2 bg-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-700/80 rounded-full transition-colors"><X size={16} /></button>
+                      </div>
+                      <div className="flex items-center gap-2.5 opacity-50"> {/* Muting these for now since they are rarely used */}
+                        <input value={editAvatar} onChange={(e) => setEditAvatar(e.target.value)}
+                          placeholder={t('agents.avatarPlaceholder', 'Avatar URL (optional)')}
+                          className="flex-1 px-3 py-1.5 bg-slate-950/40 border border-white/[0.08] rounded-xl text-xs text-slate-400 focus:outline-none" />
+                        <select value={editTheme} onChange={(e) => setEditTheme(e.target.value)} aria-label={t('agents.theme', 'Theme')}
+                          className="px-3 py-1.5 bg-slate-950/40 border border-white/[0.08] rounded-xl text-xs text-slate-400 focus:outline-none">
+                          <option value="">{t('agents.theme', 'Theme')}</option>
+                          <option value="dark">{t('agents.themeDark', 'Dark')}</option>
+                          <option value="light">{t('agents.themeLight', 'Light')}</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Inline bind UI removed 2026-04-08 — see handleBind comment above. */}
+                </div>
+
+                {/* Workspace file editor (expanded) */}
+                {fileEditAgentId === agent.id && (
+                  <div className="border-t border-white/[0.06] bg-slate-950/30">
+                    {/* File tabs */}
+                    <div className="grid grid-cols-2 gap-1.5 border-b border-white/[0.04] p-3 sm:grid-cols-3 xl:grid-cols-6">
+                      {workspaceFiles.map((fileName) => (
+                        <button key={fileName}
+                          onClick={() => { setActiveFile(fileName); void loadFile(agent.id, fileName); }}
+                          className={`rounded-xl px-3 py-2 text-[11px] font-medium text-left transition-colors ${
+                            activeFile === fileName
+                              ? 'bg-brand-500/20 text-brand-300 ring-1 ring-brand-500/40 shadow-sm'
+                              : 'text-slate-500 hover:bg-slate-800/60 hover:text-slate-300'
+                          }`}>
+                          {fileName}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* File description */}
+                    <div className="px-5 pt-4">
+                      <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">
+                        {activeFile
+                          ? t(WORKSPACE_FILE_META[activeFile] || 'agents.file.defaultDesc', WORKSPACE_FILE_META[activeFile] ? undefined : 'OpenClaw workspace file: {file}').replace('{file}', activeFile)
+                          : t('agents.noWorkspaceFiles', 'No markdown workspace files found for this agent.')}
+                      </p>
+                    </div>
+
+                    {/* Editor */}
+                    <div className="p-5">
+                      {fileListLoading || fileLoading ? (
+                        <div className="flex items-center justify-center py-12">
+                          <Loader2 size={24} className="animate-spin text-slate-600" />
+                        </div>
+                      ) : !activeFile ? (
+                        <div className="rounded-2xl border border-dashed border-white/[0.08] bg-slate-900/40 px-6 py-12 text-sm text-center text-slate-500">
+                          {t('agents.noTopLevelFiles', 'This agent does not expose any top-level markdown workspace files yet.')}
+                        </div>
+                      ) : (
+                        <textarea
+                          value={fileContent}
+                          onChange={(e) => setFileContent(e.target.value)}
+                          rows={20}
+                          className="w-full px-4 py-3 bg-slate-950/60 backdrop-blur-md border border-white/[0.08] hover:border-white/[0.12] rounded-2xl text-sm text-slate-300 font-mono leading-relaxed focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/50 resize-y min-h-[300px] transition-colors"
+                          placeholder={activeFile === 'SOUL.md'
+                            ? t('agents.placeholder.soul', 'You are a helpful assistant specialized in...\n\n# Personality\n- Friendly and professional\n- Always explain your reasoning\n\n# Rules\n- Never share private information\n- Always cite sources')
+                            : activeFile === 'TOOLS.md'
+                            ? t('agents.placeholder.tools', '# Available Tools\n- exec: Run shell commands\n- read: Read files\n- write: Write files\n\n# Restrictions\n- Do not delete files without confirmation')
+                            : t('agents.placeholder.file', 'Content for {file}...').replace('{file}', activeFile)
+                          }
+                        />
+                      )}
+
+                      {/* Save button */}
+                      <div className="flex items-center justify-between mt-3">
+                        <span className="text-[11px] font-medium text-slate-500">
+                          {fileDirty ? t('agents.unsavedChanges', 'Unsaved changes') : ''}
+                        </span>
+                        <button onClick={handleSaveFile}
+                          disabled={!fileDirty || fileSaving}
+                          className={`px-4 py-2 text-xs font-medium rounded-full flex items-center gap-2 transition-colors ${
+                            fileSaved
+                              ? 'bg-emerald-500/20 text-emerald-400'
+                              : fileDirty
+                              ? 'bg-brand-500 text-white shadow-md shadow-brand-500/20 hover:bg-brand-400'
+                              : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                          }`}>
+                          {fileSaving ? <Loader2 size={14} className="animate-spin" /> :
+                           fileSaved ? <Check size={14} /> : <Save size={14} />}
+                          {fileSaved ? t('agents.saved') : t('agents.save')}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* F-063: Recommended agents from marketplace (featured, not yet installed) */}
+        <RecommendedAgentsSection
+          installedIds={new Set(agents.map(a => a.id))}
+          onBrowseAll={() => setShowMarketplace(true)}
+          onInstalledReload={loadAgents}
+        />
+      </div>
+
+      {/* F-063 0.4.0: share modal — auto-composes from the selected agent's workspace */}
+      {shareAgentId && (
+        <ShareAgentForm
+          preselectedAgentId={shareAgentId}
+          onClose={() => setShareAgentId(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------
+// F-063: Small recommendation strip shown on the Agents home page.
+// Fetches featured agents from marketplace, filters out already-installed,
+// lets the user install with one click or jump to full marketplace.
+// ------------------------------------------------------------------
+
+interface MarketAgentLite {
+  slug: string;
+  name: string;
+  name_zh?: string | null;
+  description: string;
+  description_zh?: string | null;
+  emoji: string;
+  tier: string;
+  install_count: number;
+}
+
+type InstallStageLite = 'converting' | 'writing-workspace' | 'registering' | 'applying-identity' | 'done';
+
+const STAGE_LABELS_LITE: Record<InstallStageLite, string> = {
+  converting: '转换中...',
+  'writing-workspace': '写入工作区...',
+  registering: '注册中(15-30s)...',
+  'applying-identity': '应用身份...',
+  done: '完成',
+};
+
+function RecommendedAgentsSection({
+  installedIds,
+  onBrowseAll,
+  onInstalledReload,
+}: {
+  installedIds: Set<string>;
+  onBrowseAll: () => void;
+  onInstalledReload: () => void;
+}) {
+  const [recs, setRecs] = useState<MarketAgentLite[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [installing, setInstalling] = useState<Map<string, InstallStageLite>>(new Map());
+
+  const load = useCallback(async () => {
+    const api = (window as any).electronAPI;
+    if (!api?.marketplaceList) { setLoading(false); return; }
+    try {
+      const res = await api.marketplaceList({ featured: true });
+      if (res?.success) {
+        const items: MarketAgentLite[] = (res.data?.agents ?? [])
+          .filter((a: MarketAgentLite) => !installedIds.has(a.slug))
+          .slice(0, 4);
+        setRecs(items);
+      }
+    } catch { /* ignore */ }
+    setLoading(false);
+  }, [installedIds]);
+
+  useEffect(() => { load(); }, [load]);
+
+  // Subscribe to install progress broadcasts.
+  useEffect(() => {
+    const api = (window as any).electronAPI;
+    if (!api?.onMarketplaceInstallProgress) return;
+    const unsub = api.onMarketplaceInstallProgress((payload: { slug: string; stage: InstallStageLite }) => {
+      setInstalling(prev => {
+        const next = new Map(prev);
+        if (payload.stage === 'done') {
+          next.delete(payload.slug);
+        } else {
+          next.set(payload.slug, payload.stage);
+        }
+        return next;
+      });
+      if (payload.stage === 'done') {
+        onInstalledReload();
+        load();
+      }
+    });
+    return () => unsub();
+  }, [load, onInstalledReload]);
+
+  const handleInstall = async (slug: string) => {
+    const api = (window as any).electronAPI;
+    setInstalling(s => { const n = new Map(s); n.set(slug, 'converting'); return n; });
+    try {
+      await api.marketplaceInstall(slug);
+    } catch { /* ignore, progress events will update UI */ }
+  };
+
+  if (loading || recs.length === 0) return null;
+
+  return (
+    <div className="mt-8 rounded-3xl border border-violet-500/20 bg-violet-500/5 p-6 backdrop-blur-xl">
+      <div className="flex items-center justify-between mb-5">
+        <div>
+          <h2 className="text-sm font-semibold text-violet-300 flex items-center gap-2">
+            <Sparkles size={16} className="text-violet-400" />
+            ✨ 推荐给你
+          </h2>
+          <p className="text-[12px] text-slate-400 mt-1">这些精选 agent 可能对你有用,一键就能添加</p>
+        </div>
+        <button
+          onClick={onBrowseAll}
+          className="text-[12px] px-4 py-2 font-medium rounded-full border border-violet-500/30 text-violet-300 hover:bg-violet-500/20 transition-colors"
+        >
+          查看更多 →
+        </button>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        {recs.map(agent => {
+          const stage = installing.get(agent.slug);
+          const isInstalling = !!stage;
+          return (
+            <div
+              key={agent.slug}
+              className="rounded-2xl border border-white/[0.06] bg-slate-900/60 backdrop-blur-md p-4 flex flex-col hover:border-white/[0.12] transition-colors"
+            >
+              <div className="flex items-start gap-4 mb-3">
+                <span className="text-3xl drop-shadow-sm">{agent.emoji}</span>
+                <div className="flex-1 min-w-0 pt-1">
+                  <h3 className="text-sm font-semibold text-slate-200 truncate">{agent.name_zh || agent.name}</h3>
+                  <p className="text-[11px] font-medium text-slate-500 mt-0.5 flex items-center gap-1">
+                    <ShoppingBag size={10} className="text-slate-600" />
+                    {agent.install_count} 次安装
+                  </p>
+                </div>
+              </div>
+              <p className="text-[12px] text-slate-400 leading-relaxed line-clamp-2 mb-4 flex-1">
+                {agent.description_zh || agent.description}
+              </p>
+              {isInstalling ? (
+                <div className="flex items-center justify-center gap-2 text-[11px] font-medium text-violet-400 bg-violet-500/10 py-2 rounded-xl">
+                  <Loader2 size={14} className="animate-spin" />
+                  {STAGE_LABELS_LITE[stage!]}
+                </div>
+              ) : (
+                <button
+                  onClick={() => handleInstall(agent.slug)}
+                  className="w-full text-[12px] font-medium py-2 rounded-xl bg-violet-500/20 hover:bg-violet-500/30 text-violet-300 transition-colors border border-violet-500/30"
+                >
+                  + 一键安装
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}

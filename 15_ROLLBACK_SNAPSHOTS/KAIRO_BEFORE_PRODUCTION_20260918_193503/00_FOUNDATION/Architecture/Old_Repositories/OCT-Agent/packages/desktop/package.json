@@ -1,0 +1,151 @@
+{
+  "name": "oct-agent-desktop",
+  "version": "0.5.0",
+  "description": "OCT Desktop — Visual AI agent manager with persistent memory",
+  "author": "everest-an",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "vite",
+    "dev:electron": "npx -p typescript tsc -p tsconfig.electron.json && concurrently \"vite --strictPort\" \"wait-on http://localhost:5173 && node scripts/run-electron-dev.mjs\"",
+    "build": "npx -p typescript tsc -p tsconfig.electron.json && vite build",
+    "build:package": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --dir",
+    "test": "vitest run",
+    "test:project-isolation": "vitest run src/test/memory-project-isolation.test.ts",
+    "test:watch": "vitest",
+    "verify:project-header": "node scripts/verify-project-header.mjs",
+    "verify:chat": "node scripts/verify-chat.mjs",
+    "preview": "vite preview",
+    "package:mac": "npm run build && electron-builder --mac",
+    "package:win": "npm run build && electron-builder --win",
+    "package:linux": "npm run build && electron-builder --linux",
+    "fix-openclaw": "node ../../scripts/fix-openclaw-plugin.js"
+  },
+  "dependencies": {
+    "@types/ws": "^8.18.1",
+    "jszip": "^3.10.1",
+    "lucide-react": "^0.468.0",
+    "npm": "^10.9.0",
+    "react-force-graph-2d": "^1.29.1",
+    "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
+    "remark-gfm": "^4.0.1",
+    "ws": "^8.20.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/typography": "^0.5.19",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/node": "^25.5.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.1.0",
+    "electron": "33.4.11",
+    "electron-builder": "^25.1.0",
+    "jsdom": "^29.0.1",
+    "postcss": "^8.4.49",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwindcss": "^3.4.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0",
+    "vitest": "^4.1.2",
+    "wait-on": "^8.0.0"
+  },
+  "build": {
+    "appId": "market.awareness.claw",
+    "productName": "OCT-Agent",
+    "artifactName": "OCT-Agent-${version}-${arch}.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "node_modules/npm/**/*",
+      "cache/**/*",
+      "resources/icon.*"
+    ],
+    "asarUnpack": [
+      "node_modules/npm/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "workflows",
+        "to": "workflows",
+        "filter": [
+          "*.yaml",
+          "*.yml"
+        ]
+      }
+    ],
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.productivity",
+      "icon": "resources/icon.icns",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    },
+    "dmg": {
+      "window": {
+        "width": 640,
+        "height": 480
+      },
+      "contents": [
+        {
+          "x": 150,
+          "y": 200,
+          "type": "file"
+        },
+        {
+          "x": 490,
+          "y": 200,
+          "type": "link",
+          "path": "/Applications"
+        },
+        {
+          "x": 320,
+          "y": 380,
+          "type": "file",
+          "path": "scripts/fix-app.command",
+          "name": "⚠️ 首次打开必读 First-Run Fix.command"
+        }
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "resources/icon.ico"
+    },
+    "linux": {
+      "target": [
+        "deb",
+        "AppImage"
+      ],
+      "category": "Utility"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": "always",
+      "shortcutName": "OCT-Agent",
+      "allowToChangeInstallationDirectory": false,
+      "include": "scripts/installer.nsh"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "everest-an",
+      "repo": "OCT-Agent"
+    }
+  },
+  "license": "Apache-2.0"
+}

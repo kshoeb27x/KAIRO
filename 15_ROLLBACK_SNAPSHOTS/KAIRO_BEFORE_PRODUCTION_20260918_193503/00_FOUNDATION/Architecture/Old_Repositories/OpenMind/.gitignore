@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# Node
+node_modules/
+tray/assets/icon.png
+tray/assets/icon.ico
+
+# Generated data
+cerebral/data/
+
+# Misc
+.DS_Store
+Thumbs.db
+*.log
+
+# Self-improving agent logs (per-developer, not committed by default)
+.learnings/
+
+# Claude Code scratch: slice-loop logs and transient git worktrees
+.claude/tmp/
+.claude/worktrees/
+
+# Run-and-fix loop smoke-test scratch (sessions write these while smoking Cerebral)
+cerebral.smoke*
+smoke_client*.py
+
+# Machine-local Claude Code config (permissions/hooks) -- not for the public repo
+.claude/settings.local.json
+
+# trading_data (#831) local OHLCV cache -- machine-local, never source data
+cerebral/cache/

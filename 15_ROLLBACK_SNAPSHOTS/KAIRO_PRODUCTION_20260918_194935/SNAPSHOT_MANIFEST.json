@@ -1,0 +1,460 @@
+{
+  "type": "KAIRO_TARGETED_PRODUCTION_ROLLBACK",
+  "created_at": "2026-09-18T19:50:57",
+  "snapshot": "C:\\Users\\kshoe\\Downloads\\KAIRO_Foundation\\KAIRO\\15_ROLLBACK_SNAPSHOTS\\KAIRO_PRODUCTION_20260918_194935",
+  "files_copied": 74,
+  "files_skipped": 0,
+  "source_repositories_included": false,
+  "frozen_archive_included": false,
+  "extraction_workspace_included": false,
+  "production_modified": false,
+  "deletion_performed": false,
+  "code_executed": false,
+  "network_used": false,
+  "records": [
+    {
+      "path": "00_FOUNDATION\\Architecture\\MASTER_ARCHITECTURE.md",
+      "status": "COPIED",
+      "size": 669,
+      "sha256": "05426aef4c222b3f7a44348b669736ebe593063f59555e4970f587893d1277dd"
+    },
+    {
+      "path": "02_AGENTS\\Coding\\CODING_AGENT.md",
+      "status": "COPIED",
+      "size": 343,
+      "sha256": "fa469d536c59e97bc0ae30eb8cfb3ed7341deeed3b481c309b472ce7e07c8283"
+    },
+    {
+      "path": "03_DATA\\README.md",
+      "status": "COPIED",
+      "size": 249,
+      "sha256": "4cd28dbb356ef396c487e25d4434a6e8470607a82fa7b50a04d41c4eae35a7d7"
+    },
+    {
+      "path": "05_UI\\Web\\app.js",
+      "status": "COPIED",
+      "size": 2694,
+      "sha256": "86ceded6be5326f613bd630f4c3fe55fa0a83d7d51ff8266ddd676948b0e456e"
+    },
+    {
+      "path": "05_UI\\Web\\index.html",
+      "status": "COPIED",
+      "size": 3783,
+      "sha256": "79e8dd300a5fc6da657767578d21c529cb8801c431f24ba3c4531f6cb2020776"
+    },
+    {
+      "path": "05_UI\\Web\\style.css",
+      "status": "COPIED",
+      "size": 4553,
+      "sha256": "dbce78b871fc4037f69c2e09bf2839e8aa01853c79bf49adbf87ac9f162d6e2d"
+    },
+    {
+      "path": "06_SECURITY\\README.md",
+      "status": "COPIED",
+      "size": 214,
+      "sha256": "b6925aad4fcc4b85f48fe3bb01f38d2779eb54cfee3bcb224b6bcc72fab2a9f7"
+    },
+    {
+      "path": "06_SECURITY\\Permissions\\PERMISSION_MODEL.md",
+      "status": "COPIED",
+      "size": 424,
+      "sha256": "58f0a4be58b7510a9d35d035e0c34618157b6730acedd6fed96ae5df6083c5f8"
+    },
+    {
+      "path": "07_RUNTIME\\test_runtime.py",
+      "status": "COPIED",
+      "size": 934,
+      "sha256": "9c89c686a4dd2e7f4ad5d32c8b7a1c2b304b571f4cccd48da1e17e4a7199f014"
+    },
+    {
+      "path": "07_RUNTIME\\__init__.py",
+      "status": "COPIED",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "07_RUNTIME\\Events\\event_bus.py",
+      "status": "COPIED",
+      "size": 889,
+      "sha256": "fec605d90d45f28c8046f2c942ad67923e3f18c2ac5168e6db2e3a6376d2579c"
+    },
+    {
+      "path": "07_RUNTIME\\Events\\__init__.py",
+      "status": "COPIED",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "07_RUNTIME\\State\\runtime_state.py",
+      "status": "COPIED",
+      "size": 1235,
+      "sha256": "80dd3c9702b6dec667bb61fbc4a154ac79894380cc2ed5133c3fb6dc4305d64e"
+    },
+    {
+      "path": "07_RUNTIME\\State\\__init__.py",
+      "status": "COPIED",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "07_RUNTIME\\Task_Manager\\task_manager.py",
+      "status": "COPIED",
+      "size": 1414,
+      "sha256": "66a0ea035693d5be5fcb30104ddb79f16b200c7247243e5e78d3d7d4fa0c3b29"
+    },
+    {
+      "path": "07_RUNTIME\\Task_Manager\\__init__.py",
+      "status": "COPIED",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "07_RUNTIME\\Workflow\\__init__.py",
+      "status": "COPIED",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "10_DOCUMENTATION\\Technical\\kairo_capability_matrix.json",
+      "status": "COPIED",
+      "size": 4400,
+      "sha256": "98b999b041c1dd4401815fd4f1d5cc2f349ffad8deb7308c072346c0b57c1fd7"
+    },
+    {
+      "path": "10_DOCUMENTATION\\Technical\\kairo_component_selection.json",
+      "status": "COPIED",
+      "size": 2014,
+      "sha256": "7de6825672d59c981c5dd20364f68fb43580fdadfe3fb0ff6dea00e342ff389b"
+    },
+    {
+      "path": "10_DOCUMENTATION\\Technical\\kairo_master_analysis.json",
+      "status": "COPIED",
+      "size": 7315444,
+      "sha256": "9f5e3cb94a0e2d67ae8a9e8255b4c690b7ca7302a358a2ca34f40093962717d5"
+    },
+    {
+      "path": "10_DOCUMENTATION\\Technical\\KAIRO_MASTER_CHANGE_PLAN.md",
+      "status": "COPIED",
+      "size": 3319,
+      "sha256": "b61f995b99182fae505a77959402fd436801ffbb98f8016b3a4bc894a699b54e"
+    },
+    {
+      "path": "10_DOCUMENTATION\\Technical\\kairo_master_consolidation.py",
+      "status": "COPIED",
+      "size": 32283,
+      "sha256": "b3b95e4b418fb96e5aa12a4f241a9b5ae91935abfa03cb5c000f15ad763cc23d"
+    },
+    {
+      "path": "10_DOCUMENTATION\\Technical\\kairo_project_inventory.json",
+      "status": "COPIED",
+      "size": 152176,
+      "sha256": "e346edae7e434aafb0a4c402cf5715768c38ea963f2f37704e85e47df5f75249"
+    },
+    {
+      "path": "10_DOCUMENTATION\\Technical\\llm_component_scan.json",
+      "status": "COPIED",
+      "size": 229077,
+      "sha256": "efcf5c49c6725c909aa819f4861cdbc7d34b830062a0b2c688613e45d5882eff"
+    },
+    {
+      "path": "10_DOCUMENTATION\\Technical\\repository_audit.json",
+      "status": "COPIED",
+      "size": 848622,
+      "sha256": "2e1f2d1f876f2ec87850dffca7e6ca6e5e262055cb7fbb1291ba291377c52a9c"
+    },
+    {
+      "path": "10_DOCUMENTATION\\Technical\\repository_capability_audit.json",
+      "status": "COPIED",
+      "size": 57440,
+      "sha256": "d2c9eeaa2a3b2c3fc3c254099645ea87990c132287916b227a92455b93fe448d"
+    },
+    {
+      "path": "10_DOCUMENTATION\\Technical\\repository_decisions.json",
+      "status": "COPIED",
+      "size": 2838,
+      "sha256": "49a02223192ff20fa390307574a3335357e7b6b228303f0b3b87ff4f1e2929dd"
+    },
+    {
+      "path": "10_DOCUMENTATION\\Technical\\REPOSITORY_DECISIONS.md",
+      "status": "COPIED",
+      "size": 4111,
+      "sha256": "c7ece7cdd6541ec6994498ac0c361371ebf63e54debe32adc76973ecdd65933f"
+    },
+    {
+      "path": "10_DOCUMENTATION\\Technical\\repository_deep_audit.json",
+      "status": "COPIED",
+      "size": 21252,
+      "sha256": "2c0948fdb00e8105265bfe4e70e5777173db67992487309d045a176f8375ba1a"
+    },
+    {
+      "path": "10_DOCUMENTATION\\Technical\\REPOSITORY_MIGRATION.md",
+      "status": "COPIED",
+      "size": 1679,
+      "sha256": "1f0ab832cf9c2ebd4d412dec4ac6d516dea846690f38ac56bb1f7264a3008061"
+    },
+    {
+      "path": "10_DOCUMENTATION\\Technical\\START_HERE.md",
+      "status": "COPIED",
+      "size": 512,
+      "sha256": "abf6aa4560f1cd18fcea8c69ba1edeaa566881e922e5dfc750e06e9cd0f501e0"
+    },
+    {
+      "path": "src\\capability_mapper.py",
+      "status": "COPIED",
+      "size": 4251,
+      "sha256": "8ebed5dcc8f0a86b8b5cae0016e0d063dc7b84fee0753e370646fdb5fa7c2d1f"
+    },
+    {
+      "path": "src\\component_scanner.py",
+      "status": "COPIED",
+      "size": 4921,
+      "sha256": "fa1d2cd2b643f468453b65d0337a01cf8a8059d52b988cfd5a1b30e2870ac13b"
+    },
+    {
+      "path": "src\\kairo.py",
+      "status": "COPIED",
+      "size": 792,
+      "sha256": "634e0262f640a50b9533a13976d91d635a8197e321b81c1a1f972f29d04bffd1"
+    },
+    {
+      "path": "src\\kairo_architecture_mapper.py",
+      "status": "COPIED",
+      "size": 18326,
+      "sha256": "f15d948d2ab455d74506cacc2c46f1b206bd336f4c746b558f7ef4caac5bff45"
+    },
+    {
+      "path": "src\\kairo_build.py",
+      "status": "COPIED",
+      "size": 8783,
+      "sha256": "fcfab76564e470f6c3e7fa12a41e073fe2f408a7c265897ee51340ae30f65667"
+    },
+    {
+      "path": "src\\kairo_cleanup_audit.py",
+      "status": "COPIED",
+      "size": 17531,
+      "sha256": "00016a62ed6f4ea929a102ffe61df6052953e92491893c371db4277073d951a4"
+    },
+    {
+      "path": "src\\kairo_cleanup_audit_v2.py",
+      "status": "COPIED",
+      "size": 18188,
+      "sha256": "2d744b7937d96b2373cbe99d2d341592df8909b2084a4c7beb0827c4125304da"
+    },
+    {
+      "path": "src\\kairo_cleanup_plan.py",
+      "status": "COPIED",
+      "size": 17161,
+      "sha256": "5d1c0923a9b2a3019ba4ff864e5f2b36af394ca45ece9c9426700c4643e02a7b"
+    },
+    {
+      "path": "src\\kairo_consolidation_engine.py",
+      "status": "COPIED",
+      "size": 18882,
+      "sha256": "19ab23794bc07acef7a04e16bed05e97846377f69132953fc8b45ddffa1f3afd"
+    },
+    {
+      "path": "src\\kairo_dependency_gate.py",
+      "status": "COPIED",
+      "size": 16745,
+      "sha256": "fc781d0d172e947beda4286d8d97eddc008c0617fd0c71b87af8a63f50db3e18"
+    },
+    {
+      "path": "src\\kairo_extraction_engine.py",
+      "status": "COPIED",
+      "size": 27026,
+      "sha256": "80e3ad0841bd45b8b6dceca1c54d731bd76adbbf3641fa915dac45d5dbcabc2d"
+    },
+    {
+      "path": "src\\kairo_final_integration.py",
+      "status": "COPIED",
+      "size": 20173,
+      "sha256": "c6a48bae278b610a17359cdcb4fcdc9af91c8134912ed0d6b0ab645a417ba713"
+    },
+    {
+      "path": "src\\kairo_final_merge_gate.py",
+      "status": "COPIED",
+      "size": 23588,
+      "sha256": "bcef14a38f3aa26ef2c575800e40cfce2e2ecee5a5b2276059a3fac46e8a5759"
+    },
+    {
+      "path": "src\\kairo_final_merge_gate_v2.py",
+      "status": "COPIED",
+      "size": 22792,
+      "sha256": "aa9d2dd1698d61eb8d09243696b05e415d58add344418c3b7fb6910ed12dd54d"
+    },
+    {
+      "path": "src\\kairo_final_staging.py",
+      "status": "COPIED",
+      "size": 19500,
+      "sha256": "b030c6a485bc85201addea1355d7cb6f7e54039bb2f6cc4916e4b1ef9e0d5074"
+    },
+    {
+      "path": "src\\kairo_integration_builder.py",
+      "status": "COPIED",
+      "size": 10921,
+      "sha256": "416f268b06c3f2d55be5b6dc4cb0cf0183e11dbe304ca416914656078d4fd0bb"
+    },
+    {
+      "path": "src\\kairo_rollback_snapshot.py",
+      "status": "COPIED",
+      "size": 3417,
+      "sha256": "f703863e9eb7ec70de4d0bf5b904318c117523d3d7d01f964dcff9dc655492ba"
+    },
+    {
+      "path": "src\\kairo_security_gate.py",
+      "status": "COPIED",
+      "size": 12818,
+      "sha256": "8d066f50f66e24a67633ad780fe3f2d9cfea1363fb2888580356eb3c28a62827"
+    },
+    {
+      "path": "src\\kairo_targeted_retest.py",
+      "status": "COPIED",
+      "size": 4980,
+      "sha256": "521aad6ac341db49d41904454e208b17ff85d2dad1c9fe95254fb9bd253a50a7"
+    },
+    {
+      "path": "src\\kairo_targeted_rollback_v2.py",
+      "status": "COPIED",
+      "size": 5190,
+      "sha256": "3fd8f2b0bb1d71ae439112cc3327dc1395bf638d9bf16f2ad1a834f562f4f78e"
+    },
+    {
+      "path": "src\\kairo_testing_gate.py",
+      "status": "COPIED",
+      "size": 15241,
+      "sha256": "12be5b416d37e39ab2d085f4311c06e718835367541bb1970e88b01d56b4fc9d"
+    },
+    {
+      "path": "src\\kairo_testing_remediation_gate.py",
+      "status": "COPIED",
+      "size": 6784,
+      "sha256": "f176ef06d1e0dd94c7869b630b2987725c03a37cd1f883822c26e2be082f38de"
+    },
+    {
+      "path": "src\\main.py",
+      "status": "COPIED",
+      "size": 5331,
+      "sha256": "5cc83307c8ace7a8f17ee720c896242b43c41cbfa84e22c449a14ebdf10b7cc1"
+    },
+    {
+      "path": "src\\policy.py",
+      "status": "COPIED",
+      "size": 3095,
+      "sha256": "b40055180e2716a49308c81b9dc76220177f4e44a34432c73aec3f18d1150182"
+    },
+    {
+      "path": "src\\project_discovery.py",
+      "status": "COPIED",
+      "size": 8800,
+      "sha256": "95aeb863c6cfb8531a6c7391e7ed7623d6d2de997cc05e9b5238167c8bf83183"
+    },
+    {
+      "path": "src\\repo_auditor.py",
+      "status": "COPIED",
+      "size": 10435,
+      "sha256": "dc740d255a2d72019eb6c9a8956612077e1da923592e62ff7fca13abcbebbf07"
+    },
+    {
+      "path": "src\\repo_capability_auditor.py",
+      "status": "COPIED",
+      "size": 8329,
+      "sha256": "d8eac0e317385a13fe3d46507442aee2bb9962cabca9aa87ec7de976bcc671a7"
+    },
+    {
+      "path": "src\\repo_deep_auditor.py",
+      "status": "COPIED",
+      "size": 19422,
+      "sha256": "01a31af1a30ac8378f3fe0884e0ed8306bad067cf98d0889b91d217fc07c083a"
+    },
+    {
+      "path": "src\\__init__.py",
+      "status": "COPIED",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "src\\__main__.py",
+      "status": "COPIED",
+      "size": 84,
+      "sha256": "a506742e4dab82bbf691f4eafb320f51bb99a84c27345b307867695c83ee7177"
+    },
+    {
+      "path": "src\\api\\server.py",
+      "status": "COPIED",
+      "size": 5489,
+      "sha256": "0f7b0ebbcfb1f47806e9f1f3b317fbd98080b12dea81d52dd504f57619d0b303"
+    },
+    {
+      "path": "src\\core\\init.py",
+      "status": "COPIED",
+      "size": 1057,
+      "sha256": "3131acb7e6ff62f7e86cbc6909d6b72b7b133d228f7af98dc37ba39a56933872"
+    },
+    {
+      "path": "src\\core\\kairo.py",
+      "status": "COPIED",
+      "size": 1249,
+      "sha256": "87b69fab9ba58f9f3cbab7a50ea9553725bcfc3e6467c2f60384655636ce76df"
+    },
+    {
+      "path": "src\\core\\kairo_core.py",
+      "status": "COPIED",
+      "size": 2571,
+      "sha256": "a38e08326e46862deb32188f23e7721628726e2057b6d7ab66d0d96525edce9c"
+    },
+    {
+      "path": "src\\core\\runtime_controller.py",
+      "status": "COPIED",
+      "size": 1210,
+      "sha256": "b66c97a36f26c96c215890e2f12d5bb3fa4f5d0304e09e45ba0db2b95ac24af1"
+    },
+    {
+      "path": "src\\core\\__init__.py",
+      "status": "COPIED",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "config\\policy.yaml",
+      "status": "COPIED",
+      "size": 264,
+      "sha256": "b96aed39fe509392baeb0845bb0bc9c17b3f61c8e7fa81927c3da6d0d2e08150"
+    },
+    {
+      "path": "scripts\\bootstrap.ps1",
+      "status": "COPIED",
+      "size": 1419,
+      "sha256": "889b2ce637accb2b08ce04af21830e86327334db821677b8b05d59e1a7d44fa0"
+    },
+    {
+      "path": "README.md",
+      "status": "COPIED",
+      "size": 1612,
+      "sha256": "5747c8233cd6f19333e87ab3e434a3b0eaea7c93de332b8ff0c734588ef5f3c7"
+    },
+    {
+      "path": "requirements.txt",
+      "status": "COPIED",
+      "size": 139,
+      "sha256": "a6e863343f4ac20fd9d01efb13e2589f849979737d38e282b5e1a3b743642b80"
+    },
+    {
+      "path": "pytest.ini",
+      "status": "COPIED",
+      "size": 107,
+      "sha256": "adbcec80106491d10afa9b8a67ae1110c05676d9c8fbe0becc824d563013c248"
+    },
+    {
+      "path": ".gitignore",
+      "status": "COPIED",
+      "size": 160,
+      "sha256": "23686eb2095de13cc614f47af4cbfd649dbae1263c830de8f28795cabdc20cc8"
+    },
+    {
+      "path": ".env.example",
+      "status": "COPIED",
+      "size": 110,
+      "sha256": "1efc23e4436dc6146e2f5bdbf68d65580d072bf38d1bd37125e66c7f7c5a80e1"
+    }
+  ]
+}

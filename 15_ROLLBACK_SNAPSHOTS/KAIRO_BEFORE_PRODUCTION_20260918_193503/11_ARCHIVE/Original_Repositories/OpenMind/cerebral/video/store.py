@@ -1,0 +1,865 @@
+"""Video store -- SQLite backing for the video-watching primitive (ADR-0017).
+
+Schema lives in openmind.db as a `videos` table.  Every stage transition is
+committed per-video so the batch runner is fully resumable (ADR-0017 decision 4).
+
+Stages: enumerated -> downloaded -> transcribed -> escalated -> extracted -> verified
+
+S2 #640 adds: ocr_text, visual_summary, escalated columns.
+S5 #642 adds: video_clusters + video_ideas tables.
+S6 #644 adds: verdict, confidence, evidence_links columns to video_clusters.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+from cerebral.paths import data_dir
+
+_DEFAULT_DB = data_dir() / "openmind.db"
+
+_DDL = """
+CREATE TABLE IF NOT EXISTS videos (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    url           TEXT    NOT NULL UNIQUE,
+    channel       TEXT,
+    collection    TEXT,
+    title         TEXT,
+    duration      REAL,
+    transcript    TEXT,
+    ocr_text      TEXT,
+    visual_summary TEXT,
+    escalated     INTEGER DEFAULT 0,
+    stage         TEXT    NOT NULL DEFAULT 'enumerated',
+    -- ADR-0018 S1: the acquisition source of this item. 'video' (yt-dlp) or
+    -- 'github' (a markdown doc from a cloned repo). Lets the panel show a
+    -- source-scoped view while clusters/collections stay shared.
+    source_type   TEXT    NOT NULL DEFAULT 'video',
+    created_at    TEXT    NOT NULL,
+    updated_at    TEXT    NOT NULL
+);
+
+-- Clusters are scoped to a collection (the batch's category): the same label
+-- may exist in two collections without merging.  S22: UNIQUE(collection, label).
+CREATE TABLE IF NOT EXISTS video_clusters (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    label          TEXT    NOT NULL,
+    collection     TEXT    NOT NULL DEFAULT '',
+    member_count   INTEGER NOT NULL DEFAULT 0,
+    verdict        TEXT,
+    confidence     REAL,
+    evidence_links TEXT,
+    memory_id      TEXT,
+    UNIQUE(collection, label)
+);
+
+CREATE TABLE IF NOT EXISTS video_ideas (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    video_id   INTEGER NOT NULL UNIQUE,
+    idea_text  TEXT    NOT NULL,
+    cluster_id INTEGER NOT NULL
+);
+
+-- ADR-0018 S1: per-repo git/page state that doesn't belong on the shared item
+-- rows. head_sha is the HEAD commit at last ingest (for the ls-remote re-check);
+-- description is the front-page og:description used as grounding + panel subtitle.
+CREATE TABLE IF NOT EXISTS github_repos (
+    repo_url   TEXT PRIMARY KEY,
+    head_sha   TEXT,
+    description TEXT,
+    -- ADR-0018 S6: set when git ls-remote HEAD != head_sha; drives the up-arrow.
+    update_available INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+);
+"""
+
+# Migration: add columns to tables created before this slice.
+_MIGRATIONS = [
+    "ALTER TABLE videos ADD COLUMN ocr_text TEXT",
+    "ALTER TABLE videos ADD COLUMN visual_summary TEXT",
+    "ALTER TABLE videos ADD COLUMN escalated INTEGER DEFAULT 0",
+    # S6 #644
+    "ALTER TABLE video_clusters ADD COLUMN verdict TEXT",
+    "ALTER TABLE video_clusters ADD COLUMN confidence REAL",
+    "ALTER TABLE video_clusters ADD COLUMN evidence_links TEXT",
+    # S7 #645
+    "ALTER TABLE video_clusters ADD COLUMN memory_id TEXT",
+    # S8 #653
+    "ALTER TABLE video_clusters ADD COLUMN people_required INTEGER DEFAULT 1",
+    # ADR-0018 S1: source_type on pre-github DBs (existing rows backfill to 'video').
+    "ALTER TABLE videos ADD COLUMN source_type TEXT NOT NULL DEFAULT 'video'",
+    # ADR-0018 S6: update_available on pre-S6 github_repos rows.
+    "ALTER TABLE github_repos ADD COLUMN update_available INTEGER NOT NULL DEFAULT 0",
+    # ADR-0019 S2: per-repo Budd-requeue counter (drain to local at 3).
+    "ALTER TABLE github_repos ADD COLUMN budd_requeues INTEGER NOT NULL DEFAULT 0",
+]
+
+
+@dataclass
+class Video:
+    id: int
+    url: str
+    channel: Optional[str]
+    title: Optional[str]
+    duration: Optional[float]
+    transcript: Optional[str]
+    ocr_text: Optional[str]
+    visual_summary: Optional[str]
+    escalated: bool
+    stage: str
+    created_at: str
+    updated_at: str
+    collection: Optional[str] = None
+    source_type: str = "video"
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "url": self.url,
+            "channel": self.channel,
+            "collection": self.collection,
+            "source_type": self.source_type,
+            "title": self.title,
+            "duration": self.duration,
+            "transcript": self.transcript,
+            "ocr_text": self.ocr_text,
+            "visual_summary": self.visual_summary,
+            "escalated": self.escalated,
+            "stage": self.stage,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
+class VideoStore:
+    """Thread-safe via check_same_thread=False (same posture as JobSearchStore)."""
+
+    def __init__(self, db_path: Path = _DEFAULT_DB) -> None:
+        from cerebral.db._sqlite import connect
+        self._con = connect(db_path)
+        self._con.row_factory = sqlite3.Row
+        self._con.executescript(_DDL)
+        self._run_migrations()
+        self._migrate_collections()
+
+    def _run_migrations(self) -> None:
+        for sql in _MIGRATIONS:
+            try:
+                self._con.execute(sql)
+                self._con.commit()
+            except sqlite3.OperationalError:
+                pass  # column already exists
+
+    def _migrate_collections(self) -> None:
+        """S22: add `collection` scoping to videos + clusters on pre-collection DBs.
+
+        Videos get a nullable collection column; existing rows (all from the first
+        money-ideas channel) are backfilled once to 'money-making idea'.  Clusters
+        need their UNIQUE(label) constraint replaced with UNIQUE(collection, label),
+        which SQLite can only do via a table rebuild -- ids are preserved so the
+        video_ideas.cluster_id references stay valid.
+        """
+        con = self._con
+        added_videos_col = False
+        try:
+            con.execute("ALTER TABLE videos ADD COLUMN collection TEXT")
+            con.commit()
+            added_videos_col = True
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        if added_videos_col:
+            # One-shot backfill: every pre-collection video is from the money channel.
+            con.execute(
+                "UPDATE videos SET collection = 'money-making idea' WHERE collection IS NULL"
+            )
+            con.commit()
+
+        cols = [r[1] for r in con.execute("PRAGMA table_info(video_clusters)").fetchall()]
+        if "collection" not in cols:
+            # Rebuild: the old table's UNIQUE(label) can't be dropped in place.
+            # _run_migrations already added memory_id + people_required, so every
+            # column below exists on the source table.
+            con.executescript(
+                """
+                CREATE TABLE video_clusters_new (
+                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                    label          TEXT    NOT NULL,
+                    collection     TEXT    NOT NULL DEFAULT '',
+                    member_count   INTEGER NOT NULL DEFAULT 0,
+                    verdict        TEXT,
+                    confidence     REAL,
+                    evidence_links TEXT,
+                    memory_id      TEXT,
+                    people_required INTEGER DEFAULT 1,
+                    UNIQUE(collection, label)
+                );
+                INSERT INTO video_clusters_new
+                    (id, label, collection, member_count, verdict, confidence,
+                     evidence_links, memory_id, people_required)
+                SELECT id, label, 'money-making idea', member_count, verdict, confidence,
+                       evidence_links, memory_id, COALESCE(people_required, 1)
+                FROM video_clusters;
+                DROP TABLE video_clusters;
+                ALTER TABLE video_clusters_new RENAME TO video_clusters;
+                """
+            )
+            con.commit()
+
+    def _conn(self) -> sqlite3.Connection:
+        return self._con
+
+    @staticmethod
+    def _now() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    def upsert(
+        self,
+        url: str,
+        *,
+        channel: str | None = None,
+        collection: str | None = None,
+        title: str | None = None,
+        duration: float | None = None,
+        transcript: str | None = None,
+        ocr_text: str | None = None,
+        visual_summary: str | None = None,
+        escalated: bool | None = None,
+        stage: str = "enumerated",
+        source_type: str = "video",
+    ) -> int:
+        """Insert or update a video row.  Returns the video id.
+
+        ``source_type`` ('video' | 'github', ADR-0018 S1) is set on INSERT only --
+        it is never changed on a later upsert, so a github doc stays 'github'
+        across re-ingests without the caller having to re-pass it.
+        """
+        now = self._now()
+        with self._conn() as con:
+            cur = con.execute(
+                """
+                INSERT INTO videos
+                    (url, channel, collection, title, duration, transcript,
+                     ocr_text, visual_summary, escalated,
+                     stage, source_type, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(url) DO UPDATE SET
+                    channel        = COALESCE(excluded.channel,        channel),
+                    collection     = COALESCE(excluded.collection,     collection),
+                    title          = COALESCE(excluded.title,          title),
+                    duration       = COALESCE(excluded.duration,       duration),
+                    transcript     = COALESCE(excluded.transcript,     transcript),
+                    ocr_text       = COALESCE(excluded.ocr_text,       ocr_text),
+                    visual_summary = COALESCE(excluded.visual_summary, visual_summary),
+                    escalated      = COALESCE(excluded.escalated,      escalated),
+                    stage          = excluded.stage,
+                    updated_at     = excluded.updated_at
+                """,
+                (
+                    url, channel, collection, title, duration, transcript,
+                    ocr_text, visual_summary,
+                    int(escalated) if escalated is not None else None,
+                    stage, source_type, now, now,
+                ),
+            )
+            if cur.lastrowid and cur.lastrowid != 0:
+                return cur.lastrowid
+            row = con.execute("SELECT id FROM videos WHERE url = ?", (url,)).fetchone()
+            return row["id"]
+
+    def get_by_id(self, video_id: int) -> Video | None:
+        with self._conn() as con:
+            row = con.execute("SELECT * FROM videos WHERE id = ?", (video_id,)).fetchone()
+        return _row_to_video(row) if row else None
+
+    def get_by_url(self, url: str) -> Video | None:
+        with self._conn() as con:
+            row = con.execute("SELECT * FROM videos WHERE url = ?", (url,)).fetchone()
+        return _row_to_video(row) if row else None
+
+    def enumerate_video(
+        self,
+        url: str,
+        channel: str,
+        title: str | None = None,
+        collection: str | None = None,
+    ) -> None:
+        """Insert a new video at stage=enumerated; skip if it already exists."""
+        now = self._now()
+        with self._conn() as con:
+            con.execute(
+                """
+                INSERT OR IGNORE INTO videos
+                    (url, channel, collection, title, stage, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 'enumerated', ?, ?)
+                """,
+                (url, channel, collection, title, now, now),
+            )
+
+    def next_enumerated(self, channel: str | None = None) -> Video | None:
+        """Return the lowest-id enumerated row for a channel (None if done)."""
+        sql = "SELECT * FROM videos WHERE stage = 'enumerated'"
+        params: list = []
+        if channel is not None:
+            sql += " AND channel = ?"
+            params.append(channel)
+        sql += " ORDER BY id LIMIT 1"
+        with self._conn() as con:
+            row = con.execute(sql, params).fetchone()
+        return _row_to_video(row) if row else None
+
+    def stage_counts(self, channel: str | None = None) -> dict[str, int]:
+        """Return COUNT(*) per stage for the given channel (or all channels)."""
+        sql = "SELECT stage, COUNT(*) AS cnt FROM videos"
+        params: list = []
+        if channel is not None:
+            sql += " WHERE channel = ?"
+            params.append(channel)
+        sql += " GROUP BY stage"
+        with self._conn() as con:
+            rows = con.execute(sql, params).fetchall()
+        return {row["stage"]: row["cnt"] for row in rows}
+
+    def pending_channel(self) -> "str | None":
+        """The channel with the most unprocessed ('enumerated') rows.
+
+        S16 #671: lets a batch resume after a Cerebral restart wiped the in-memory
+        channel -- the work-to-do is discoverable from the DB.
+        """
+        with self._conn() as con:
+            row = con.execute(
+                "SELECT channel FROM videos WHERE stage = 'enumerated' AND channel IS NOT NULL"
+                " GROUP BY channel ORDER BY COUNT(*) DESC LIMIT 1"
+            ).fetchone()
+        return row["channel"] if row else None
+
+    def total_pending(self) -> int:
+        """Count of all unprocessed ('enumerated') rows across channels (S16 #671)."""
+        with self._conn() as con:
+            return con.execute(
+                "SELECT COUNT(*) FROM videos WHERE stage = 'enumerated'"
+            ).fetchone()[0]
+
+    def clear_pending(self, channel: str | None = None) -> int:
+        """Delete unwatched ('enumerated') rows so the queue can be reset (S21).
+
+        Only removes never-processed rows -- watched videos, clusters, and
+        committed ideas are untouched. Scoped to one channel if given.
+        """
+        sql = "DELETE FROM videos WHERE stage = 'enumerated'"
+        params: list = []
+        if channel is not None:
+            sql += " AND channel = ?"
+            params.append(channel)
+        with self._conn() as con:
+            cur = con.execute(sql, params)
+            return cur.rowcount
+
+    def reset_failed(
+        self, channel: str | None = None, collection: str | None = None
+    ) -> int:
+        """Reset failed videos back to 'enumerated' so a resume re-attempts them.
+
+        Failures are usually transient (YouTube rate-blocks a burst mid-run), so
+        the rows are recoverable, not broken. Returns the number reset. Scope by
+        channel and/or collection; unscoped resets every failed row.
+        """
+        sql = "UPDATE videos SET stage = 'enumerated' WHERE stage = 'failed'"
+        params: list = []
+        if channel is not None:
+            sql += " AND channel = ?"
+            params.append(channel)
+        if collection is not None:
+            sql += " AND collection = ?"
+            params.append(collection)
+        with self._conn() as con:
+            cur = con.execute(sql, params)
+            return cur.rowcount
+
+    # ── S5 #642: idea extraction + incremental clustering ─────────────────────
+
+    def get_cluster_labels(self, collection: str | None = None) -> list[str]:
+        """Return existing cluster labels (passed to the LLM for reuse).
+
+        Scoped to ``collection`` when given so a new channel's extraction only
+        sees its own labels -- money clusters never leak into a harness batch.
+        """
+        sql = "SELECT label FROM video_clusters"
+        params: list = []
+        if collection is not None:
+            sql += " WHERE collection = ?"
+            params.append(collection)
+        sql += " ORDER BY id"
+        with self._conn() as con:
+            rows = con.execute(sql, params).fetchall()
+        return [row["label"] for row in rows]
+
+    def get_cluster_summaries(self, collection: str | None = None) -> list[dict]:
+        """[{label, sample_idea}] per cluster (ADR-0018 S4, content-aware merge).
+
+        Like get_cluster_labels but each label carries its representative (longest)
+        idea, so the extractor can merge on meaning -- e.g. fold "Custom Agent
+        Frameworks" into an existing "Custom Agent Harnesses" -- instead of on
+        label wording alone. Collection-scoped, so cross-source clusters in the
+        same collection are all offered as merge targets.
+        """
+        sql = "SELECT id, label FROM video_clusters"
+        params: list = []
+        if collection is not None:
+            sql += " WHERE collection = ?"
+            params.append(collection)
+        sql += " ORDER BY id"
+        out: list[dict] = []
+        with self._conn() as con:
+            rows = con.execute(sql, params).fetchall()
+            for r in rows:
+                idea = con.execute(
+                    "SELECT idea_text FROM video_ideas WHERE cluster_id = ?"
+                    " ORDER BY LENGTH(idea_text) DESC LIMIT 1",
+                    (r["id"],),
+                ).fetchone()
+                out.append({
+                    "label": r["label"],
+                    "sample_idea": idea["idea_text"] if idea else "",
+                })
+        return out
+
+    def get_or_create_cluster(
+        self, label: str, collection: str = "", people_required: int = 1
+    ) -> int:
+        """Return cluster id for (collection, label), creating + bumping member_count.
+
+        people_required is a property of the method, set once when the cluster is
+        first created (like the verdict); later videos in the cluster keep it.
+        """
+        with self._conn() as con:
+            con.execute(
+                "INSERT OR IGNORE INTO video_clusters (label, collection, member_count,"
+                " people_required) VALUES (?, ?, 0, ?)",
+                (label, collection, people_required),
+            )
+            con.execute(
+                "UPDATE video_clusters SET member_count = member_count + 1"
+                " WHERE label = ? AND collection = ?",
+                (label, collection),
+            )
+            row = con.execute(
+                "SELECT id FROM video_clusters WHERE label = ? AND collection = ?",
+                (label, collection),
+            ).fetchone()
+        return row["id"]
+
+    def upsert_idea(self, video_id: int, idea_text: str, cluster_id: int) -> None:
+        """Insert or replace the extracted idea for a video."""
+        with self._conn() as con:
+            con.execute(
+                """
+                INSERT INTO video_ideas (video_id, idea_text, cluster_id)
+                VALUES (?, ?, ?)
+                ON CONFLICT(video_id) DO UPDATE SET
+                    idea_text  = excluded.idea_text,
+                    cluster_id = excluded.cluster_id
+                """,
+                (video_id, idea_text, cluster_id),
+            )
+
+    def list_clusters(
+        self, collection: str | None = None, source_type: str | None = None
+    ) -> list[dict]:
+        """Return clusters ordered by member_count desc, including verdict + memory_id.
+
+        Filtered to ``collection`` when given (the Videos panel / video_query use
+        this to keep each collection's clusters separate). ADR-0018 S1: when
+        ``source_type`` is given, return only clusters that have >=1 idea whose
+        source item is of that type -- so the GitHub tab shows github-touching
+        clusters and the Videos tab video-touching ones. A cluster with ideas from
+        both sources appears under both.
+        """
+        sql = (
+            "SELECT id, label, collection, member_count, verdict, confidence,"
+            " evidence_links, memory_id, people_required FROM video_clusters"
+        )
+        clauses: list[str] = []
+        params: list = []
+        if collection is not None:
+            clauses.append("collection = ?")
+            params.append(collection)
+        if source_type is not None:
+            clauses.append(
+                "id IN (SELECT vi.cluster_id FROM video_ideas vi"
+                " JOIN videos v ON v.id = vi.video_id WHERE v.source_type = ?)"
+            )
+            params.append(source_type)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY member_count DESC"
+        with self._conn() as con:
+            rows = con.execute(sql, params).fetchall()
+        import json as _json
+        result = []
+        for row in rows:
+            evidence = None
+            if row["evidence_links"]:
+                try:
+                    evidence = _json.loads(row["evidence_links"])
+                except Exception:
+                    evidence = None
+            result.append({
+                "id": row["id"],
+                "label": row["label"],
+                "collection": row["collection"],
+                "member_count": row["member_count"],
+                "verdict": row["verdict"],
+                "confidence": row["confidence"],
+                "evidence": evidence,
+                "memory_id": row["memory_id"],
+                "people_required": row["people_required"],
+            })
+        return result
+
+    def upsert_github_repo(
+        self, repo_url: str, head_sha: str | None = None, description: str | None = None
+    ) -> None:
+        """Insert/update a repo's git+page state (ADR-0018 S1).
+
+        head_sha / description are COALESCEd so a call that only refreshes the SHA
+        (the ls-remote re-check) doesn't wipe a previously-fetched description.
+        """
+        now = self._now()
+        with self._conn() as con:
+            con.execute(
+                """
+                INSERT INTO github_repos (repo_url, head_sha, description, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(repo_url) DO UPDATE SET
+                    head_sha    = COALESCE(excluded.head_sha,    head_sha),
+                    description = COALESCE(excluded.description, description),
+                    updated_at  = excluded.updated_at
+                """,
+                (repo_url, head_sha, description, now),
+            )
+
+    def list_github_repos(self) -> list[dict]:
+        """All ingested repos, most-recently-touched first (GitHub panel list)."""
+        with self._conn() as con:
+            rows = con.execute(
+                "SELECT repo_url, head_sha, description, update_available, updated_at"
+                " FROM github_repos ORDER BY updated_at DESC"
+            ).fetchall()
+        return [
+            {
+                "repo_url": r["repo_url"],
+                "head_sha": r["head_sha"],
+                "description": r["description"],
+                "update_available": bool(r["update_available"]),
+                "updated_at": r["updated_at"],
+            }
+            for r in rows
+        ]
+
+    def set_update_available(self, repo_url: str, available: bool) -> None:
+        """Flag/unflag a repo as having a newer remote HEAD (ADR-0018 S6)."""
+        with self._conn() as con:
+            con.execute(
+                "UPDATE github_repos SET update_available = ? WHERE repo_url = ?",
+                (1 if available else 0, repo_url),
+            )
+
+    # ── ADR-0019 S2: Budd-requeue counter (repo-grain requeue, drain at 3) ──
+    def get_budd_requeues(self, repo_url: str) -> int:
+        """How many times this repo has been requeued off a Budd failure."""
+        with self._conn() as con:
+            row = con.execute(
+                "SELECT budd_requeues FROM github_repos WHERE repo_url = ?", (repo_url,)
+            ).fetchone()
+        return int(row["budd_requeues"]) if row else 0
+
+    def bump_budd_requeues(self, repo_url: str) -> int:
+        """Increment the repo's Budd-requeue counter (creating the row if absent);
+        return the new count."""
+        with self._conn() as con:
+            con.execute(
+                "INSERT INTO github_repos (repo_url, updated_at, budd_requeues) "
+                "VALUES (?, ?, 1) "
+                "ON CONFLICT(repo_url) DO UPDATE SET budd_requeues = budd_requeues + 1",
+                (repo_url, self._now()),
+            )
+            row = con.execute(
+                "SELECT budd_requeues FROM github_repos WHERE repo_url = ?", (repo_url,)
+            ).fetchone()
+        return int(row["budd_requeues"])
+
+    def reset_budd_requeues(self, repo_url: str) -> None:
+        """Clear the counter after a repo finishes cleanly."""
+        with self._conn() as con:
+            con.execute(
+                "UPDATE github_repos SET budd_requeues = 0 WHERE repo_url = ?", (repo_url,)
+            )
+
+    def get_repo_collection(self, repo_url: str) -> str | None:
+        """The collection the repo's docs were last filed under -- used to re-ingest
+        with the same category. None if the repo has no docs yet."""
+        with self._conn() as con:
+            row = con.execute(
+                "SELECT collection FROM videos WHERE channel = ? AND source_type = 'github'"
+                " ORDER BY updated_at DESC LIMIT 1",
+                (repo_url,),
+            ).fetchone()
+        return row["collection"] if row else None
+
+    def get_github_repo(self, repo_url: str) -> dict | None:
+        """Return {repo_url, head_sha, description, update_available, updated_at} or None."""
+        with self._conn() as con:
+            row = con.execute(
+                "SELECT repo_url, head_sha, description, update_available, updated_at"
+                " FROM github_repos WHERE repo_url = ?",
+                (repo_url,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "repo_url": row["repo_url"],
+            "head_sha": row["head_sha"],
+            "description": row["description"],
+            "update_available": bool(row["update_available"]),
+            "updated_at": row["updated_at"],
+        }
+
+    def get_cluster_by_id(self, cluster_id: int) -> dict | None:
+        """Return a single cluster dict by id, or None if not found."""
+        import json as _json
+        with self._conn() as con:
+            row = con.execute(
+                "SELECT id, label, collection, member_count, verdict, confidence,"
+                " evidence_links, memory_id, people_required"
+                " FROM video_clusters WHERE id = ?",
+                (cluster_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        evidence = []
+        if row["evidence_links"]:
+            try:
+                evidence = _json.loads(row["evidence_links"])
+            except Exception:
+                evidence = []
+        return {
+            "id": row["id"],
+            "label": row["label"],
+            "collection": row["collection"],
+            "member_count": row["member_count"],
+            "verdict": row["verdict"],
+            "confidence": row["confidence"],
+            "evidence": evidence,
+            "memory_id": row["memory_id"],
+            "people_required": row["people_required"],
+        }
+
+    def get_cluster_idea_text(self, cluster_id: int) -> str | None:
+        """Return the longest idea_text from a cluster as a representative sample."""
+        with self._conn() as con:
+            row = con.execute(
+                "SELECT idea_text FROM video_ideas WHERE cluster_id = ?"
+                " ORDER BY LENGTH(idea_text) DESC LIMIT 1",
+                (cluster_id,),
+            ).fetchone()
+        return row["idea_text"] if row else None
+
+    def set_cluster_committed(self, cluster_id: int, memory_id: str) -> None:
+        """Mark a cluster as committed to Memory by storing its memory_id."""
+        with self._conn() as con:
+            con.execute(
+                "UPDATE video_clusters SET memory_id = ? WHERE id = ?",
+                (memory_id, cluster_id),
+            )
+
+    def list_collections(self) -> list[str]:
+        """Distinct collection names that have at least one cluster, sorted."""
+        with self._conn() as con:
+            rows = con.execute(
+                "SELECT DISTINCT collection FROM video_clusters ORDER BY collection"
+            ).fetchall()
+        return [r["collection"] for r in rows if r["collection"]]
+
+    def move_cluster(self, cluster_id: int, new_collection: str) -> int | None:
+        """Move a cluster (and its videos) to another collection.
+
+        If the target collection already has a cluster with the same label,
+        merge into it: reparent the ideas, sum member_count, drop the source
+        (UNIQUE(collection, label) forbids two same-label clusters in one
+        collection). Returns the surviving cluster id, or None if not found.
+        """
+        with self._conn() as con:
+            row = con.execute(
+                "SELECT label, collection, member_count FROM video_clusters WHERE id = ?",
+                (cluster_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            if row["collection"] == new_collection:
+                return cluster_id
+            # Videos in this cluster follow it into the new collection.
+            con.execute(
+                "UPDATE videos SET collection = ? WHERE id IN"
+                " (SELECT video_id FROM video_ideas WHERE cluster_id = ?)",
+                (new_collection, cluster_id),
+            )
+            existing = con.execute(
+                "SELECT id FROM video_clusters WHERE collection = ? AND label = ?",
+                (new_collection, row["label"]),
+            ).fetchone()
+            if existing is None:
+                con.execute(
+                    "UPDATE video_clusters SET collection = ? WHERE id = ?",
+                    (new_collection, cluster_id),
+                )
+                return cluster_id
+            # Label collision -> merge into the existing target cluster.
+            con.execute(
+                "UPDATE video_ideas SET cluster_id = ? WHERE cluster_id = ?",
+                (existing["id"], cluster_id),
+            )
+            con.execute(
+                "UPDATE video_clusters SET member_count = member_count + ? WHERE id = ?",
+                (row["member_count"], existing["id"]),
+            )
+            con.execute("DELETE FROM video_clusters WHERE id = ?", (cluster_id,))
+            return existing["id"]
+
+    def get_cluster_verdict(self, cluster_id: int) -> dict | None:
+        """Return the verdict dict for a cluster, or None if not yet verified."""
+        import json as _json
+        with self._conn() as con:
+            row = con.execute(
+                "SELECT verdict, confidence, evidence_links FROM video_clusters WHERE id = ?",
+                (cluster_id,),
+            ).fetchone()
+        if row is None or row["verdict"] is None:
+            return None
+        evidence = []
+        if row["evidence_links"]:
+            try:
+                evidence = _json.loads(row["evidence_links"])
+            except Exception:
+                evidence = []
+        return {
+            "verdict": row["verdict"],
+            "confidence": row["confidence"],
+            "evidence": evidence,
+        }
+
+    def set_cluster_verdict(
+        self,
+        cluster_id: int,
+        verdict: str,
+        confidence: float | None,
+        evidence: list[str],
+    ) -> None:
+        """Store the validity verdict on a cluster.
+
+        confidence is None for the "skipped" sentinel written when a batch runs
+        with verify=off -- the cluster is committable but was never fact-checked.
+        """
+        import json as _json
+        with self._conn() as con:
+            con.execute(
+                "UPDATE video_clusters SET verdict=?, confidence=?, evidence_links=? WHERE id=?",
+                (verdict, confidence, _json.dumps(evidence), cluster_id),
+            )
+
+    def list_videos_by_cluster(self, cluster_id: int, limit: int = 5) -> list[dict]:
+        """Return up to limit videos in a cluster, newest first, with idea text."""
+        with self._conn() as con:
+            rows = con.execute(
+                """
+                SELECT v.id, v.title, v.url, v.stage, v.duration, vi.idea_text
+                FROM video_ideas vi
+                JOIN videos v ON v.id = vi.video_id
+                WHERE vi.cluster_id = ?
+                ORDER BY v.id DESC
+                LIMIT ?
+                """,
+                (cluster_id, limit),
+            ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "title": row["title"],
+                "url": row["url"],
+                "stage": row["stage"],
+                "duration": row["duration"],
+                "idea_text": row["idea_text"],
+            }
+            for row in rows
+        ]
+
+    def list_recent_videos(self, limit: int = 8) -> list[dict]:
+        """Return the most-recently-processed videos (newest first), with idea text.
+
+        S11 #659: excludes the enumerated/failed clutter so the Videos tab shows a
+        compact 'recently watched' list instead of per-cluster video walls.
+        """
+        with self._conn() as con:
+            rows = con.execute(
+                """
+                SELECT v.id, v.title, v.url, v.stage, vi.idea_text
+                FROM videos v
+                LEFT JOIN video_ideas vi ON vi.video_id = v.id
+                WHERE v.stage NOT IN ('enumerated', 'failed')
+                ORDER BY v.id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "title": row["title"],
+                "url": row["url"],
+                "stage": row["stage"],
+                "idea_text": row["idea_text"],
+            }
+            for row in rows
+        ]
+
+    def get_idea_for_video(self, video_id: int) -> dict | None:
+        """Return the extracted idea row for a video, or None."""
+        with self._conn() as con:
+            row = con.execute(
+                """
+                SELECT vi.idea_text, vc.label AS cluster_label, vc.member_count
+                FROM video_ideas vi
+                JOIN video_clusters vc ON vc.id = vi.cluster_id
+                WHERE vi.video_id = ?
+                """,
+                (video_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "idea_text": row["idea_text"],
+            "cluster_label": row["cluster_label"],
+            "member_count": row["member_count"],
+        }
+
+
+def _row_to_video(row: sqlite3.Row) -> Video:
+    return Video(
+        id=row["id"],
+        url=row["url"],
+        channel=row["channel"],
+        title=row["title"],
+        duration=row["duration"],
+        transcript=row["transcript"],
+        ocr_text=row["ocr_text"] if "ocr_text" in row.keys() else None,
+        visual_summary=row["visual_summary"] if "visual_summary" in row.keys() else None,
+        escalated=bool(row["escalated"] or 0) if "escalated" in row.keys() else False,
+        stage=row["stage"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+        collection=row["collection"] if "collection" in row.keys() else None,
+        source_type=row["source_type"] if "source_type" in row.keys() else "video",
+    )

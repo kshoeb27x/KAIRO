@@ -1,0 +1,108 @@
+# How to do common things in MIRA
+
+Practical recipes. Most can be done in the web UI or by asking MIRA in chat.
+
+## Connect a channel
+- **Telegram:** create a bot with @BotFather (`/newbot`), copy the token, add it under Settings → Channels → My channels (or "add my telegram bot"). The bot starts receiving immediately — no restart. Then **link your chat**: Settings → My channels → Link Telegram, and send the `LINK-XXXX-XXXX` code to the bot. (Linking is what captures your chat id for proactive messages.) See "Telegram: delivery mode and routing mode" below for polling vs webhook and Personal/Shared/Guest.
+- **Signal:** register a number (the one interactive step — signal-cli sends a verification code), then add it as your Signal **account** (a phone number — not just the global toggle). MIRA **auto-installs** the runtime on first add: a pinned, checksum-verified signal-cli + a bundled Temurin JRE into `~/.mira/deps/` (Linux-x86_64 uses the self-contained native build, no JRE). It then starts the `signal-cli daemon --http` process for that account itself. Works on Linux, macOS, and **Windows**. To use your own signal-cli instead, point `channels.signal.cli_binary` at it (an explicit path overrides the managed copy). One-time ~100 MB download (~150 MB on Windows). (0.277.0+.)
+- **Email:** add an email account (IMAP/SMTP, or Gmail/Outlook OAuth) under Settings → Email. Inbound mail from allowlisted senders becomes a conversation.
+
+## Telegram: delivery mode and routing mode
+Two independent settings on a Telegram account:
+
+**Delivery mode — how MIRA receives messages:**
+- **Polling (default):** MIRA long-polls Telegram's `getUpdates`. Works anywhere — behind NAT, on localhost, no public URL / port-forward / reverse proxy / TLS. The right choice for self-hosted/home installs. Cost: one poll loop per account.
+- **Webhook:** Telegram pushes updates to `https://<host>/webhook/telegram/<account-id>`. Efficient and instant, but needs a public HTTPS URL Telegram can reach (domain + reverse proxy + cert) — for production deployments. **A per-account `secret_token` is required** (set it on the account and pass it as `secret_token` in your Telegram `setWebhook` call): MIRA verifies the `X-Telegram-Bot-Api-Secret-Token` header and **rejects unverified inbound**, so a stranger who learns the account id can't inject messages. If you genuinely can't set a secret, `channels.telegram.allow_insecure_webhook=true` re-opens the (insecure) unverified path. Polling needs none of this.
+
+**Routing mode — who each inbound message runs as** (change it in place from the account row; it applies live):
+- **Personal (default):** serves **only the owner's verified chat**. You link your own chat once (send a LINK code); any other sender is ignored. Linking is **per-bot**, so the same phone can own a personal bot under one MIRA account *and* be a different user on another bot (e.g. a shared family bot under a second account) — claiming a personal bot doesn't disturb your other links. *Pro:* simplest, private, secure-by-default (a stranger who finds the bot can't act as you). *Con:* one person only.
+- **Shared:** one bot for several people. An admin creates the bot once; each member **keeps their own MIRA account** and links by sending their own LINK code. *Pro:* family/team bot, members never touch BotFather, each keeps their own context/memory/persona/voice. *Con:* one bot identity for all; members must link first; admin holds the token.
+- **Guest-OK:** like Shared, but unlinked senders get a temporary **guest** session. *Pro:* open access. *Con:* anyone who finds the bot can use it; least private.
+
+> Recommended for a household: a single **Shared** bot. Use **Personal** for a solo bot; **Guest-OK** only when you want it open to anyone.
+
+## Turn on & tune proactive check-ins (Presence)
+- **Enable:** finish onboarding (admins are auto-enabled; others enable once a safety contact is set), or use the setup wizard's Check-ins step, or ask MIRA in chat. Enabling needs a safety contact for non-admins.
+- **Tune on the Presence page** (Settings → Presence): rhythm — Fuzzy band (1–N times/day at varied times) or Scheduled fixed times; tone sliders (warmth/playfulness/verbosity) + presets; which message types MIRA may send (check-in / joke / "what I've been up to" / follow-up / share / encouragement); whether it may mention what its agents did for you; daily briefing on/off + hour.
+- **Or just tell MIRA in chat:** "message me less", "be funnier", "stop the jokes", "only check in in the mornings", "pause till Monday" — it updates the same settings.
+- Test instantly with "Send a check-in now" / "Send a briefing now" in My Preferences → Notifications & devices.
+
+## Set up a care network (a safety net for a child, an older adult, or yourself)
+- On **Settings → Presence → Care network**, pick a **care role**: *Just me* (default — no ongoing wellbeing view of you, but your safety contact is still alerted in a genuine emergency), *An adult who needs support* (a peer arrangement — a care contact is alerted on distress/silence and, with your consent, sees your wellbeing view; no age framing), *A child* (a guardian is alerted; gentle age-aware tone), or *An older adult* (a contact is alerted on silence or distress). The care network isn't only for children and older adults — any adult can name a contact for their own distress/missed-check-in escalation, and the *supported adult* role adds the same watched-over experience without the age framing.
+- Choose the **contact(s) to alert** — search by **name** (no internal user id needed). You can name **more than one** (e.g. both parents); an alert reaches all of them and counts as delivered if it reaches any. For a monitored role (supported adult / child / older adult) also tick that **the person knows**. If you don't, MIRA discloses the arrangement to the person itself (woven naturally into a check-in) before it would ever reach out to the contact — it's never covert.
+- What escalates: genuine distress, or three unanswered check-ins over ~48h. An *acute* signal (self-harm, acute physical symptoms) sends an urgent heads-up and shows the person crisis resources; a *concerning* one (low mood) sends a softer nudge. The contact only ever sees a one-line summary — never the conversation. MIRA gives a human a heads-up; it does not call emergency services.
+
+## Get replies as voice
+- Set your per-channel voice preference to **always** (Telegram/Signal). MIRA will send a voice note alongside text. Web plays TTS in the browser.
+- Pick a voice (e.g. Kokoro `af_heart`, `bf_emma`). Enable Kokoro for natural local speech.
+
+## Pair the mobile app
+- In the web UI go to **My Preferences → Notifications & devices → Pair a mobile device** and click **Show pairing code** (My Preferences is in the sidebar and open to **every** user — you don't need to be an admin). Open the MIRA app on your phone and scan the QR — it configures the server URL and signs you in with no password to type. The code is single-use and expires in ~2 minutes; click **Regenerate** if it lapses. The panel flips to "✓ Paired" once the phone claims it.
+- The QR is only ever drawn in your authenticated browser; the pairing secret is stored hashed and consumed on first use.
+
+## Send mobile push via Firebase (FCM)
+- Browser/phone Web Push works out of the box. The **native app** uses Firebase Cloud Messaging, which is **off by default**.
+- To enable (admin): create a Firebase project, download a **service-account JSON**, then set in `mira_config.json`:
+  `notifications.fcm = { "enabled": true, "project_id": "<your-project>", "service_account_json_path": "/path/to/service-account.json" }` and restart. Keep the JSON readable only by the MIRA process user — it's a credential (MIRA redacts its path in the config API).
+- With `enabled=false`, nothing changes (web push only). Care/wellbeing alerts are delivered at high Android priority; other notifications at normal priority.
+
+## Add an external tool (MCP)
+- Go to the `/mcp` page → **Browse catalog** → pick a server (e.g. Filesystem, GitHub, Puppeteer) → **Use** → fill any path/key → **Save**. It connects immediately (no restart). Tools appear to the agent as `mcp__<server>__<tool>`.
+- **Runtimes are handled for you.** Most catalog servers run via `npx` (Node) or `uvx` (Python/uv). If that runtime isn't installed, MIRA **asks permission** ("This MCP server needs Node.js (~55 MB) — install it now?") and, on approval, downloads a pinned, checksum-verified copy into `~/.mira/deps/` and connects the server. Works on Linux, macOS, and **Windows** — including a Windows service running as LocalSystem, which can't see a user-only Node/uv install. No manual Node/Python setup. (0.280.0+.)
+- Admins can curate the catalog (add/edit/enable/disable entries).
+
+## Shrink the prompt with adaptive tool loading
+- If you have many tools/MCP servers, every chat sends *all* their schemas to the model — often 10k–25k tokens before you type. Turn on **Just-in-Time Tools** to send only the relevant subset per turn.
+- Admin: set `agent.tool_selection.mode = "adaptive"` in `mira_config.json` and restart. MIRA then sends a small core set + the semantic top-K for your message + tools you used recently, plus a `find_tools` tool the model calls to load anything else on demand (nothing is hidden). Tune `top_k`, `min_similarity`, `core_tools`, `stickiness_turns`.
+- Default is `mode = "all"` (send everything, unchanged). To see the effect, note the prompt-token count in the chat footer before/after. Quickest complementary win: disable MCP servers you don't use on the `/mcp` page.
+
+## Make MIRA act in a browser
+- Add the **Puppeteer** MCP server from the catalog. On first connect MIRA downloads a managed Chrome (~150 MB) into `~/.mira/deps/puppeteer/` in the background and points the server at it — so it works on Linux, macOS and Windows (including when MIRA runs as a Windows service) with no system Chrome and no `unzip`/Node browser-download step. Browser tools light up once the download finishes (a few minutes the first time); until then you may see a "couldn't find Chrome" error. To use your own browser instead, set `PUPPETEER_EXECUTABLE_PATH` in the server's environment on the `/mcp` page.
+- Then ask MIRA to navigate, click, fill forms, or screenshot a page. Screenshots render inline.
+
+## Schedule something
+- Ask MIRA to "remind me / check X every morning at 8" — it creates an automation (cron). View/cancel your schedules via the automations tools or the Automations page.
+
+## Manage memory & notes
+- MIRA writes memories automatically. Ask "what do you remember about me?" or "forget X". Use the wiki for longer notes ("add a wiki page about my project").
+
+## Change a setting
+- Your own: ask MIRA ("set my briefing hour to 7") or use the UI.
+- Server-wide (admin): use Settings, or ask MIRA (it confirms global changes; secrets stay hidden; security/provider/proxy keys are protected).
+
+## Control model "thinking" (reasoning)
+- **See it:** when a reasoning model (gpt-oss, the qwen3 family, …) thinks, its chain-of-thought appears as a collapsed **Thinking** block above the reply — click to expand. (Reasoning streams over LM Studio's `reasoning` channel; MIRA captures it automatically.)
+- **Suppress it:** reasoning models can burn the per-round token budget thinking before they act, which stalls tool loops. Turn on **Disable model reasoning (`/no_think`)** on **Settings → Providers** (applies everywhere — chat, channels, tool loops), or use the **Thinking / No-think** toggle in the chat window to override it for one conversation.
+## Check the weather
+- Just ask — "what's the weather in Point Cook?", "will it rain tomorrow?", "weather this week". MIRA uses the built-in `weather` tool. If you don't name a place it uses your own location (from your timezone).
+- **Works out of the box, no setup:** the default provider is **Open-Meteo** — free, global, no API key, and it does its own geocoding (so no Google Maps key/billing needed).
+- **In your briefing:** with Presence/daily briefing on, the morning/evening briefing includes a short weather line for your location automatically.
+- **Switch providers (admin):** set `weather.provider = "openweathermap"` + `weather.api_key` for OpenWeatherMap, and `weather.units` to `metric` (default) or `imperial`.
+
+## Use the calendar
+- The built-in calendar works on its own — no external service. Create events from the **Calendar** page or just ask MIRA ("add lunch with Dana Friday 1pm").
+- **Connect your own external calendar** (each user, from their Calendar page): Google/Outlook via "Connect", or CalDAV (e.g. Nextcloud) by entering your server URL + username + an **app password**. An admin sets the provider once in Settings → Calendar first.
+- **Org / team events (admins):** when creating an event, use the **Visibility** picker — "Everyone" for an organisation event all users see, or "Group: <name>" to scope it to an RBAC group's members.
+- MIRA also overlays its own upcoming actions (automation runs, your daily briefing) on the calendar, read-only.
+
+## Run on WSL with Windows-host services
+- If MIRA runs in **WSL2** and your services (LM Studio, TTS, SearXNG) run on the **Windows host**, do NOT use the Windows LAN IP — a WSL2 NAT guest can't reach it. Use the `windows-host` alias instead: `http://windows-host:1234/v1`.
+- Set it up once (root): `sudo mira wsl-host-alias-install` (also done by `sudo mira helper-install`). It maps `windows-host` to the WSL gateway IP and refreshes it on every boot. Check with `mira helper-status`.
+- MIRA auto-detects URLs pointed at an unreachable Windows-host IP and offers a **one-click fix** (Settings banner) to swap them to `windows-host`. Alternative durable fix: WSL **mirrored networking** (`networkingMode=mirrored` in `.wslconfig`) so `localhost` works.
+
+## Reset a lost admin password
+- Locked out of the web UI? On the host, run `mira reset-admin-password` (or `--user <name>` for a non-admin account). It prompts for a new password (min 12 chars — a passphrase is ideal), sets it, and revokes existing sessions. Needs filesystem access to MIRA's data dir; pass `--data-dir`/`--config` if it's non-default.
+
+## Deploy / apply changes
+- Most config applies live. Rust/binary changes need a rebuild + `systemctl --user restart mira`. Web UI changes need the bundle synced. MCP server changes hot-reload with no restart.
+
+## Auto-route hard turns to a stronger model (admin)
+- In `mira_config.json`, set `agent.reasoning`: `{ "enabled": true, "provider": "<a configured provider whose model is your strong one>", "effort": "medium" }`.
+- MIRA then routes hard turns (code, math, long/multi-step prompts) to that provider and raises its reasoning effort; everything else uses the default. Tune the trip point with `min_chars`. Needs a rebuild + restart (it's a server feature).
+
+## Benchmark MIRA's memory (LongMemEval)
+- Download a LongMemEval dataset (e.g. `longmemeval_s.json`) — not bundled (not redistributable).
+- Inspect only, no API spend: `mira bench memory --dataset path/to/longmemeval_s.json --dry-run`
+- Smoke run (default 20 questions): `mira bench memory --dataset path/to/longmemeval_s.json`
+- Full run + JSON report: `mira bench memory --dataset path/to/longmemeval_s.json --all --out results.json`
+- Options: `--limit N`, `--question-type <type>` (the dataset is grouped by type, so use this to sample a specific category, e.g. `single-session-user`), `--answer-provider <id>`, `--judge-provider <id>`. Replays each conversation (with session dates) through MIRA's real memory + wiki pipeline; uses your configured providers (free if local, e.g. lmstudio).

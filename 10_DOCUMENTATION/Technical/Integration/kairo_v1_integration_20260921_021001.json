@@ -1,0 +1,130 @@
+{
+  "runner": "KAIRO V1 Integration Builder",
+  "started_at": "2026-09-21T02:09:42.282940",
+  "completed_at": "2026-09-21T02:10:01.195751",
+  "project_root": "C:\\Users\\kshoe\\Downloads\\KAIRO_Foundation\\KAIRO",
+  "snapshot": {
+    "status": "PASS",
+    "path": "15_ROLLBACK_SNAPSHOTS\\V1_INTEGRATION_20260921_020942",
+    "items": 11
+  },
+  "discovery": {
+    "core": {
+      "component": "core",
+      "module": "src.core.kairo_core",
+      "class": "KairoCore",
+      "status": "FOUND",
+      "error": null
+    },
+    "runtime": {
+      "component": "runtime",
+      "module": null,
+      "class": null,
+      "status": "NOT_FOUND",
+      "error": [
+        "runtime_manager: ImportError: attempted relative import with no known parent package"
+      ]
+    },
+    "agents": {
+      "component": "agents",
+      "module": "02_AGENTS.manager",
+      "class": "AgentManager",
+      "status": "FOUND",
+      "error": null
+    },
+    "data": {
+      "component": "data",
+      "module": "Data_Management.data_manager",
+      "class": "DataManager",
+      "status": "FOUND",
+      "error": null
+    },
+    "security": {
+      "component": "security",
+      "module": null,
+      "class": null,
+      "status": "NOT_FOUND",
+      "error": [
+        "security_manager: ImportError: attempted relative import with no known parent package"
+      ]
+    }
+  },
+  "integration_instances": {
+    "core": {
+      "status": "PASS",
+      "error": null
+    },
+    "runtime": {
+      "status": "UNVERIFIED",
+      "error": "component not found"
+    },
+    "agents": {
+      "status": "PASS",
+      "error": null
+    },
+    "data": {
+      "status": "UNVERIFIED",
+      "error": "TypeError: DataManager.__init__() missing 3 required positional arguments: 'database', 'knowledge', and 'vector'"
+    },
+    "security": {
+      "status": "UNVERIFIED",
+      "error": "component not found"
+    }
+  },
+  "unified_system": {
+    "file": "src\\kairo_system.py",
+    "validation": {
+      "status": "PASS",
+      "health": {
+        "system": "KAIRO",
+        "version": "V1",
+        "status": "ONLINE",
+        "started_at": "2026-09-21T02:10:01.185198",
+        "components": {
+          "core": false,
+          "runtime": false,
+          "agents": false,
+          "data": false,
+          "tools": false,
+          "security": false
+        }
+      }
+    }
+  },
+  "validation": {
+    "python": {
+      "checked": 565,
+      "failures": [],
+      "status": "PASS"
+    },
+    "api": {
+      "status": "PASS",
+      "file": "src\\api\\server.py"
+    },
+    "ui": {
+      "status": "PASS",
+      "missing": []
+    }
+  },
+  "cleanup": {
+    "removed": [],
+    "skipped": [
+      "12_EXTRACTION",
+      "13_FINAL_KAIRO",
+      "14_KAIRO_PRODUCTION_CANDIDATE",
+      "16_POST_MERGE_VALIDATION",
+      "17_RUNTIME_VALIDATION",
+      "18_LIVE_API_UI_VALIDATION"
+    ],
+    "errors": [],
+    "status": "PASS"
+  },
+  "critical_missing_components": [
+    "runtime",
+    "security"
+  ],
+  "hard_failures": [
+    "Critical components missing: runtime, security"
+  ],
+  "status": "FAIL"
+}

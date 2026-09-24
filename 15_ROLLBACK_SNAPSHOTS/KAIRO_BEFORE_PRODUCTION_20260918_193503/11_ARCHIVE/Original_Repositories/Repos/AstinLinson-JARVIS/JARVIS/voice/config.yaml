@@ -1,0 +1,41 @@
+environment: development
+
+logging:
+  level: INFO
+  file: logs/jarvis.log
+
+voice:
+  wake_word: Jarvis
+  backend: faster_whisper
+  sample_rate: 16000
+  whisper_model: base
+  compute_type: int8
+  vad_enabled: true
+  speech_synthesizer: pyttsx3
+  input_timeout_seconds: 6.0
+  phrase_time_limit_seconds: 12.0
+  tts_voice_hint: zira
+  tts_rate: 175
+
+llm:
+  provider: openai_compatible
+  model: qwen3
+  timeout_seconds: 60.0
+  api_base_url: http://localhost:11434/v1
+
+memory:
+  provider: in_memory
+  max_messages: 20
+
+personality:
+  traits:
+    - Friendly
+    - Professional
+    - Calm
+    - Helpful
+    - Natural conversation
+  style: concise, natural conversation
+
+skills:
+  auto_discover_entry_points: true
+  plugin_paths: []

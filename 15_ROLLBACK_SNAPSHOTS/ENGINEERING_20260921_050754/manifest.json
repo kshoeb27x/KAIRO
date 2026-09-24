@@ -1,0 +1,10 @@
+{
+  "created_at": "2026-09-21T05:07:54.794665",
+  "runner": "2.0",
+  "protected": [
+    "C:\\Users\\kshoe\\Downloads\\KAIRO_Foundation\\KAIRO\\15_ROLLBACK_SNAPSHOTS",
+    "C:\\Users\\kshoe\\Downloads\\KAIRO_Foundation\\KAIRO\\00_FOUNDATION",
+    "C:\\Users\\kshoe\\Downloads\\KAIRO_Foundation\\KAIRO\\11_ARCHIVE\\Original_Repositories"
+  ],
+  "note": "Safety snapshot before mutable engineering actions."
+}

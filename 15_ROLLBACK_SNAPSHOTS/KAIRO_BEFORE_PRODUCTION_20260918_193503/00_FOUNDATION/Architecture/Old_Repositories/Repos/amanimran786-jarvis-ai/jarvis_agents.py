@@ -1,0 +1,1020 @@
+"""
+jarvis_agents.py — Parallel agent dispatcher for Iron Man Jarvis.
+
+Aman says "run agents on X" or "brief me" and Jarvis fans out to multiple
+specialist sub-agents concurrently, collects their results, synthesises a
+single coherent briefing, and surfaces only what needs Aman's attention.
+
+Architecture
+────────────
+  dispatch(tasks) → ThreadPoolExecutor fan-out → merge → optional escalation
+
+Sub-agent types
+  "calendar"    — today's events, upcoming deadlines
+  "tasks"       — pending tasks from vault/task hub
+  "vault"       — latest vault / brain notes of interest
+  "messages"    — last known message context (intent-only, no content read)
+  "news"        — web search summary on a topic
+  "code"        — code-status / coder workbench snapshot
+  "research"    — targeted web research on a question
+  "briefing"    — full Iron Man morning briefing (bundles calendar+tasks+vault)
+
+Each sub-agent returns a dict:
+  { "agent": str, "status": "ok"|"error", "result": str, "escalate": bool }
+
+Public API
+──────────
+  run_briefing()           → str   Morning/status briefing (all agents)
+  run_parallel(agents)     → str   Run named agents, merge results
+  dispatch_single(agent, context) → dict  One agent call
+
+Router wires:
+  "brief me" / "morning briefing" / "what's my status"  → run_briefing()
+  "run agents on X" / "parallel X"                       → run_parallel(["research"], context=X)
+  "what needs my attention"                               → escalation_summary()
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import os
+import pathlib
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Callable
+
+# ── Internal imports (graceful degradation if not available) ──────────────────
+
+def _safe_import(name: str, attr: str | None = None):
+    try:
+        import importlib
+        mod = importlib.import_module(name)
+        if attr:
+            return getattr(mod, attr, None)
+        return mod
+    except Exception:
+        return None
+
+
+# ── Agent timeout (seconds per agent) ─────────────────────────────────────────
+_AGENT_TIMEOUT = 12.0
+_MAX_WORKERS   = 5
+
+
+# ── Escalation rules ──────────────────────────────────────────────────────────
+# If an agent marks escalate=True the result will be surfaced separately.
+# Conditions that trigger escalation:
+_ESCALATION_KEYWORDS = (
+    "urgent", "overdue", "blocked", "action required", "attention needed",
+    "deadline today", "failed", "error", "unread", "high priority",
+    "asap", "critical", "time sensitive", "time-sensitive", "by eod",
+    "by today", "immediately", "deadline",
+)
+
+
+def _needs_escalation(text: str) -> bool:
+    lower = text.lower()
+    return any(kw in lower for kw in _ESCALATION_KEYWORDS)
+
+
+# ── Sub-agent implementations ─────────────────────────────────────────────────
+
+def _agent_calendar(context: str = "") -> dict:
+    """Pull today's calendar events."""
+    try:
+        gs = _safe_import("google_services")
+        if gs and hasattr(gs, "get_todays_events"):
+            events = gs.get_todays_events()
+            if isinstance(events, list) and events:
+                result = "Calendar today:\n" + "\n".join(f"  • {e}" for e in events[:8])
+            elif isinstance(events, str) and events.strip():
+                result = f"Calendar today: {events.strip()}"
+            else:
+                result = "Calendar: no events today."
+        else:
+            result = "Calendar: not connected."
+        return {"agent": "calendar", "status": "ok", "result": result,
+                "escalate": _needs_escalation(result)}
+    except Exception as e:
+        return {"agent": "calendar", "status": "error", "result": f"Calendar error: {e}", "escalate": False}
+
+
+def _agent_tasks(context: str = "") -> dict:
+    """Read pending tasks from the vault task hub."""
+    try:
+        vault_capture = _safe_import("vault_capture")
+        if vault_capture and hasattr(vault_capture, "read_note"):
+            note = vault_capture.read_note("90 Task Hub", max_chars=1200)
+            if isinstance(note, dict):
+                result = note.get("content", "")
+            else:
+                result = str(note) if note else ""
+            if not result.strip():
+                result = "Tasks: task hub is empty or unreadable."
+            else:
+                # Filter to open tasks only
+                lines = [l for l in result.splitlines() if "- [ ]" in l]
+                if lines:
+                    import re as _re
+                    cleaned: list[str] = []
+                    for raw_line in lines[:10]:
+                        s = raw_line.strip()
+                        # Handle outer list bullet wrapping a backtick-quoted task:
+                        # e.g. "- `- [ ] Task text`"  →  extract inner content
+                        m = _re.match(r"^-\s*`(.+)`\s*$", s)
+                        if m:
+                            s = m.group(1).strip()
+                        # Strip leading "- [ ] " checkbox syntax
+                        s = _re.sub(r"^-\s*\[\s*\]\s*", "", s)
+                        # Strip Obsidian date tags e.g. 📅 2026-04-16
+                        s = _re.sub(r"📅\s*\d{4}-\d{2}-\d{2}", "", s)
+                        # Strip hashtag tokens e.g. #jarvis #voice
+                        s = _re.sub(r"#\w+", "", s)
+                        # Replace [[wikilinks]] with just the inner text
+                        s = _re.sub(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]", r"\1", s)
+                        s = s.strip()
+                        if s:
+                            cleaned.append(f"• {s}")
+                    result = "Open tasks:\n" + "\n".join(f"  {c}" for c in cleaned)
+                else:
+                    result = "Tasks: no open tasks found in task hub."
+        else:
+            result = "Tasks: vault not connected."
+        return {"agent": "tasks", "status": "ok", "result": result,
+                "escalate": _needs_escalation(result)}
+    except Exception as e:
+        return {"agent": "tasks", "status": "error", "result": f"Tasks error: {e}", "escalate": False}
+
+
+def _agent_vault(context: str = "") -> dict:
+    """Surface recent vault updates and brain context."""
+    try:
+        import vault
+        query = context or "recent updates projects decisions"
+        ctx = vault.build_context(query, tool="chat")
+        if ctx and ctx.strip():
+            result = "Brain context:\n" + ctx[:600]
+        else:
+            result = ""
+        return {"agent": "vault", "status": "ok", "result": result,
+                "escalate": _needs_escalation(result)}
+    except Exception as e:
+        return {"agent": "vault", "status": "error", "result": f"Vault error: {e}", "escalate": False}
+
+
+def _agent_code(context: str = "") -> dict:
+    """Pull coder workbench status."""
+    try:
+        cw = _safe_import("coder_workbench")
+        if cw and hasattr(cw, "status"):
+            status_data = cw.status()
+            if isinstance(status_data, dict):
+                branch = status_data.get("branch", "unknown")
+                changed = status_data.get("changed_files", [])
+                result = f"Code status: branch={branch}, {len(changed)} changed files"
+                if changed:
+                    result += "\n  Changed: " + ", ".join(changed[:5])
+            else:
+                result = f"Code status: {status_data}"
+        else:
+            result = "Code: workbench not available."
+        return {"agent": "code", "status": "ok", "result": result,
+                "escalate": _needs_escalation(result)}
+    except Exception as e:
+        return {"agent": "code", "status": "error", "result": f"Code error: {e}", "escalate": False}
+
+
+def _agent_research(context: str = "") -> dict:
+    """Quick web research on a topic."""
+    if not context:
+        return {"agent": "research", "status": "ok",
+                "result": "Research: no topic provided.", "escalate": False}
+    try:
+        # Use model_router to do a lightweight web-grounded lookup
+        import model_router as mr
+        prompt = (
+            f"Brief, factual summary (3–5 bullet points) on: {context}\n"
+            "Focus on what's new, relevant, or actionable in 2026."
+        )
+        chunks: list[str] = []
+        stream, _ = mr.smart_stream(prompt, tool="research")
+        for chunk in stream:
+            chunks.append(chunk)
+            if sum(len(c) for c in chunks) > 800:
+                break
+        result = "Research — " + context + ":\n" + "".join(chunks)[:800]
+        return {"agent": "research", "status": "ok", "result": result,
+                "escalate": _needs_escalation(result)}
+    except Exception as e:
+        return {"agent": "research", "status": "error",
+                "result": f"Research error: {e}", "escalate": False}
+
+
+def _agent_weather(context: str = "") -> dict:
+    """Fetch current weather for the briefing."""
+    try:
+        import tools
+        result = tools.get_weather()
+        return {"agent": "weather", "status": "ok", "result": f"Weather: {result}", "escalate": False}
+    except Exception as e:
+        return {"agent": "weather", "status": "error", "result": f"Weather: unavailable ({e})", "escalate": False}
+
+
+def _agent_email(context: str = "") -> dict:
+    """Scan unread emails for urgency signals."""
+    try:
+        gs = _safe_import("google_services")
+        if not gs or not hasattr(gs, "get_unread_email_subjects"):
+            return {"agent": "email", "status": "ok",
+                    "result": "Email: not connected.", "escalate": False}
+        emails = gs.get_unread_email_subjects(max_results=10)
+        if not emails:
+            return {"agent": "email", "status": "ok",
+                    "result": "Email: no unread messages.", "escalate": False}
+        urgent = [
+            e for e in emails
+            if _needs_escalation(e["subject"] + " " + e["snippet"])
+        ]
+        if urgent:
+            lines = [f"From {e['sender']}: {e['subject']}" for e in urgent[:3]]
+            result = f"Urgent emails ({len(urgent)}):\n" + "\n".join(f"  • {l}" for l in lines)
+            escalate = True
+        else:
+            result = f"Email: {len(emails)} unread, none flagged urgent."
+            escalate = False
+        return {"agent": "email", "status": "ok", "result": result, "escalate": escalate}
+    except Exception as e:
+        return {"agent": "email", "status": "error",
+                "result": f"Email error: {e}", "escalate": False}
+
+
+def _agent_email_urgent(context: str = "") -> dict:
+    """Surface only urgent/time-sensitive unread emails."""
+    try:
+        gs = _safe_import("google_services")
+        if not gs or not hasattr(gs, "get_unread_email_subjects"):
+            return {"agent": "email_urgent", "status": "error",
+                    "result": "Email not connected.", "escalate": False}
+        emails = gs.get_unread_email_subjects(max_results=10)
+        if not emails:
+            return {"agent": "email_urgent", "status": "ok",
+                    "result": "", "escalate": False}
+        urgent = [
+            e for e in emails
+            if _needs_escalation(e["subject"] + " " + e["snippet"])
+        ]
+        if urgent:
+            lines = [f"From {e['sender']}: {e['subject']}" for e in urgent[:3]]
+            result = "Urgent emails:\n" + "\n".join(f"  ⚠ {l}" for l in lines)
+            return {"agent": "email_urgent", "status": "ok",
+                    "result": result, "escalate": True}
+        return {"agent": "email_urgent", "status": "ok",
+                "result": "", "escalate": False}
+    except Exception as e:
+        return {"agent": "email_urgent", "status": "error",
+                "result": f"Email urgency check failed: {e}", "escalate": False}
+
+
+def _agent_meeting_prep(context: str = "") -> dict:
+    """Pull the next meeting details and any vault context about attendees/topic."""
+    try:
+        gs = _safe_import("google_services")
+        event = None
+        if gs and hasattr(gs, "get_next_event"):
+            event = gs.get_next_event()
+        if not event:
+            return {"agent": "meeting_prep", "status": "ok",
+                    "result": "No upcoming meetings found.", "escalate": False}
+
+        import datetime as _dt
+        start_str = event["start"]
+        if "T" in start_str:
+            try:
+                dt = _dt.datetime.fromisoformat(start_str)
+                time_label = dt.strftime("%-I:%M %p")
+            except Exception:
+                time_label = start_str
+        else:
+            time_label = start_str
+
+        attendees_str = ", ".join(event["attendees"][:5]) or "no attendees listed"
+        lines = [
+            f"Next meeting: {event['title']} at {time_label}",
+            f"Attendees: {attendees_str}",
+        ]
+        if event.get("location"):
+            lines.append(f"Location: {event['location']}")
+        if event.get("description"):
+            lines.append(f"Notes: {event['description'][:200]}")
+
+        # Pull vault context about the meeting title / attendees
+        vault_hint = ""
+        try:
+            import vault
+            query = event["title"] + " " + " ".join(event["attendees"][:3])
+            vault_hint = vault.build_context(query, tool="chat")
+            if vault_hint:
+                lines.append(f"Brain context:\n{vault_hint[:400]}")
+        except Exception:
+            logging.debug("[JarvisAgents] vault context fetch failed for meeting_prep", exc_info=True)
+
+        result = "\n".join(lines)
+        return {"agent": "meeting_prep", "status": "ok", "result": result, "escalate": False}
+    except Exception as e:
+        return {"agent": "meeting_prep", "status": "error",
+                "result": f"Meeting prep error: {e}", "escalate": False}
+
+
+def _agent_week(context: str = "") -> dict:
+    """Pull the next 7 days of calendar events."""
+    try:
+        gs = _safe_import("google_services")
+        if gs and hasattr(gs, "get_week_events"):
+            events = gs.get_week_events(days=7)
+            if events:
+                result = "This week's calendar:\n" + "\n".join(f"  • {e}" for e in events[:15])
+            else:
+                result = "Nothing on the calendar this week."
+        else:
+            result = "Calendar not connected."
+        return {"agent": "week", "status": "ok", "result": result,
+                "escalate": _needs_escalation(result)}
+    except Exception as e:
+        return {"agent": "week", "status": "error", "result": f"Week calendar error: {e}", "escalate": False}
+
+
+def _agent_board(context: str = "") -> dict:
+    """Surface Multica board status (in-progress and blocked issues)."""
+    try:
+        import multica_tools as mt
+        issues = mt.list_issues(limit=30)
+        in_prog = [i for i in issues if i.get("status") == "in_progress"]
+        blocked = [i for i in issues if i.get("status") == "blocked"]
+        lines: list[str] = []
+        for i in in_prog:
+            assignee = (i.get("assignee") or {}).get("name", "")
+            lines.append(f"  {i['identifier']} [{assignee or 'unassigned'}] {i['title']}")
+        for i in blocked:
+            lines.append(f"  {i['identifier']} [BLOCKED] {i['title']}")
+        result = ("Board — in progress:\n" + "\n".join(lines)) if lines else ""
+        return {"agent": "board", "status": "ok", "result": result, "escalate": bool(blocked)}
+    except Exception:
+        return {"agent": "board", "status": "ok", "result": "", "escalate": False}
+
+
+# ── Vault Brain Agents ────────────────────────────────────────────────────────
+
+
+def _agent_brain_sync(context: str = "") -> dict:
+    """Sync vault index and surface stale/missing notes for attention."""
+    try:
+        import vault
+        import datetime
+        refresh = vault.refresh_index()
+        stat = vault.status()
+        doc_count = stat.get("doc_count", 0)
+        changelog = vault.VAULT_ROOT / "wiki" / "brain" / "91 Vault Changelog.md"
+        last_entry = ""
+        if changelog.exists():
+            lines = changelog.read_text(encoding="utf-8").splitlines()
+            for line in reversed(lines):
+                if line.startswith("## "):
+                    last_entry = line.strip("# ").strip()
+                    break
+        today = datetime.date.today().isoformat()
+        result = (
+            f"Brain sync: {doc_count} docs indexed. "
+            f"Last changelog entry: {last_entry or 'unknown'}. "
+            f"Index refreshed at {today}."
+        )
+        if doc_count == 0:
+            result = "Brain sync: vault index is empty — run 'refresh the vault index' to rebuild."
+        return {"agent": "brain_sync", "status": "ok", "result": result, "escalate": doc_count == 0}
+    except Exception as e:
+        return {"agent": "brain_sync", "status": "error", "result": f"Brain sync error: {e}", "escalate": False}
+
+
+def _agent_task_extractor(context: str = "") -> dict:
+    """Scan vault task hub and agent inbox for open items and surface them."""
+    try:
+        import vault
+        import re
+        open_tasks: list[str] = []
+        for note_name in ("90 Task Hub.md", "92 Agent Inbox.md"):
+            note_path = vault.VAULT_ROOT / "wiki" / "brain" / note_name
+            if not note_path.exists():
+                continue
+            text = note_path.read_text(encoding="utf-8")
+            for line in text.splitlines():
+                if re.match(r"\s*-\s+\[\s*\]\s+.+", line):
+                    task = re.sub(r"\s*-\s+\[\s*\]\s+", "", line).strip()
+                    task = re.sub(r"\[\[([^\]]+)\]\]", r"\1", task)  # strip wiki links
+                    task = re.sub(r"📅\s*\d{4}-\d{2}-\d{2}", "", task).strip()
+                    task = re.sub(r"#\w+", "", task).strip()
+                    if task:
+                        open_tasks.append(task)
+        if not open_tasks:
+            result = "No open tasks in vault task hub or agent inbox."
+        else:
+            top = open_tasks[:8]
+            result = "Open vault tasks:\n" + "\n".join(f"  • {t}" for t in top)
+            if len(open_tasks) > 8:
+                result += f"\n  … and {len(open_tasks) - 8} more."
+        return {"agent": "task_extractor", "status": "ok", "result": result,
+                "escalate": len(open_tasks) > 5}
+    except Exception as e:
+        return {"agent": "task_extractor", "status": "error",
+                "result": f"Task extraction error: {e}", "escalate": False}
+
+
+def _agent_daily_note(context: str = "") -> dict:
+    """Ensure today's daily note exists in the vault, creating it if needed."""
+    try:
+        import datetime
+        import vault
+        today = datetime.date.today().isoformat()
+        daily_dir = vault.VAULT_ROOT / "daily"
+        daily_dir.mkdir(parents=True, exist_ok=True)
+        note_path = daily_dir / f"{today}.md"
+        if note_path.exists():
+            return {"agent": "daily_note", "status": "ok",
+                    "result": f"Daily note exists: {today}.", "escalate": False}
+        # Pull calendar and tasks for the note body
+        cal = _agent_calendar()
+        tasks = _agent_task_extractor()
+        cal_text = cal.get("result", "_No events._")
+        task_text = tasks.get("result", "_No tasks._")
+        frontmatter = (
+            f"---\ntype: daily-note\ndate: {today}\ntags: [daily, brain]\n---\n\n"
+        )
+        body = (
+            f"# {today}\n\n"
+            f"## Focus\n\n_Set your #1 priority for today._\n\n"
+            f"## Calendar\n\n{cal_text}\n\n"
+            f"## Open Tasks\n\n{task_text}\n\n"
+            f"## Notes\n\n\n"
+            f"## End of Day\n\n\n"
+        )
+        note_path.write_text(frontmatter + body, encoding="utf-8")
+        return {"agent": "daily_note", "status": "ok",
+                "result": f"Created daily note for {today}.", "escalate": False}
+    except Exception as e:
+        return {"agent": "daily_note", "status": "error",
+                "result": f"Daily note error: {e}", "escalate": False}
+
+
+def _agent_calendar_upcoming(context: str = "") -> dict:
+    """Fetch next 3 calendar events for today, formatted as a short list."""
+    try:
+        gs = _safe_import("google_services")
+        if not gs or not hasattr(gs, "get_week_events"):
+            return {"agent": "calendar_upcoming", "status": "ok",
+                    "result": "Calendar not connected.", "escalate": False}
+        # get_week_events(days=1) returns today's events as "Day DD Mon HH:MM AM/PM — Title"
+        events = gs.get_week_events(days=1)
+        if not events:
+            return {"agent": "calendar_upcoming", "status": "ok",
+                    "result": "No events scheduled for today.", "escalate": False}
+        import re as _re
+        lines: list[str] = []
+        for raw in events[:3]:
+            # Strip the day/date prefix, keep time and title
+            # Input: "Sat 7 Jun 10:00 AM — Team standup"
+            # Output: "10:00 AM - Team standup"
+            stripped = _re.sub(r"^\w+\s+\d+\s+\w+\s+", "", raw)
+            stripped = stripped.replace(" — ", " - ")
+            lines.append(stripped)
+        result = "Upcoming today:\n" + "\n".join(f"  • {l}" for l in lines)
+        return {"agent": "calendar_upcoming", "status": "ok", "result": result,
+                "escalate": _needs_escalation(result)}
+    except Exception as e:
+        return {"agent": "calendar_upcoming", "status": "error",
+                "result": f"Calendar upcoming error: {e}", "escalate": False}
+
+
+def _agent_pending_alerts(context: str = "") -> dict:
+    """Fetch pending (non-dismissed) proactive watcher alerts."""
+    try:
+        pw = _safe_import("proactive_watcher")
+        if not pw or not hasattr(pw, "get_alerts"):
+            return {"agent": "pending_alerts", "status": "ok",
+                    "result": "", "escalate": False}
+        alerts = pw.get_alerts(include_dismissed=False)
+        if not alerts:
+            return {"agent": "pending_alerts", "status": "ok",
+                    "result": "", "escalate": False}
+        lines = [a.get("message", "") for a in alerts[:5] if a.get("message")]
+        if not lines:
+            return {"agent": "pending_alerts", "status": "ok",
+                    "result": "", "escalate": False}
+        result = "Pending alerts:\n" + "\n".join(f"  ⚠ {l}" for l in lines)
+        return {"agent": "pending_alerts", "status": "ok", "result": result, "escalate": True}
+    except Exception as e:
+        return {"agent": "pending_alerts", "status": "error",
+                "result": f"Alerts error: {e}", "escalate": False}
+
+
+# ── Agent registry ─────────────────────────────────────────────────────────────
+
+_AGENTS: dict[str, Callable[[str], dict]] = {
+    "calendar":           _agent_calendar,
+    "calendar_upcoming":  _agent_calendar_upcoming,
+    "week":               _agent_week,
+    "tasks":              _agent_tasks,
+    "vault":              _agent_vault,
+    "code":               _agent_code,
+    "research":           _agent_research,
+    "email":              _agent_email,
+    "email_urgent":       _agent_email_urgent,
+    "weather":            _agent_weather,
+    "meeting_prep":       _agent_meeting_prep,
+    "board":              _agent_board,
+    "brain_sync":         _agent_brain_sync,
+    "task_extractor":     _agent_task_extractor,
+    "daily_note":         _agent_daily_note,
+    "pending_alerts":     _agent_pending_alerts,
+}
+
+_BRIEFING_AGENTS      = ["weather", "calendar", "tasks", "vault", "email", "board"]
+_WEEK_AGENTS          = ["week", "tasks"]
+_MEETING_PREP_AGENTS  = ["meeting_prep"]
+
+
+# ── Pre-warm synthesis model on import ────────────────────────────────────────
+
+def _prewarm_synthesis_model():
+    try:
+        from brains.brain_ollama import ask_local
+        ask_local("ping", model="jarvis-local", system_extra="Reply: ok")
+    except Exception:
+        logging.debug("[JarvisAgents] synthesis model pre-warm failed", exc_info=True)
+
+threading.Thread(target=_prewarm_synthesis_model, daemon=True).start()
+
+
+# ── Checkpoint / Resume (ADK-style resumable agents) ─────────────────────────
+# Each graph run gets a run_id (hash of agents + timestamp rounded to minute).
+# Completed node results are written to a JSON checkpoint sidecar so a crashed
+# run can skip already-finished nodes on the next invocation within 5 minutes.
+
+_CHECKPOINT_DIR = pathlib.Path.home() / ".jarvis" / "agent_checkpoints"
+_CHECKPOINT_TTL = 300  # seconds — stale checkpoints beyond this are ignored
+
+
+def _run_id(agents: list[str]) -> str:
+    key = ",".join(sorted(agents)) + str(int(time.time() // 60))
+    return hashlib.sha1(key.encode()).hexdigest()[:12]
+
+
+def _checkpoint_path(run_id: str) -> pathlib.Path:
+    _CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+    return _CHECKPOINT_DIR / f"{run_id}.json"
+
+
+def _load_checkpoint(run_id: str) -> dict[str, dict]:
+    """Return {agent_name: result_dict} for any run within TTL."""
+    path = _checkpoint_path(run_id)
+    try:
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if time.time() - data.get("_ts", 0) < _CHECKPOINT_TTL:
+                return {k: v for k, v in data.items() if not k.startswith("_")}
+    except Exception:
+        logging.debug("[JarvisAgents] checkpoint load failed for %s", run_id, exc_info=True)
+    return {}
+
+
+def _save_checkpoint(run_id: str, completed: dict[str, dict]) -> None:
+    try:
+        path = _checkpoint_path(run_id)
+        payload = {"_ts": time.time(), **completed}
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    except Exception:
+        logging.debug("[JarvisAgents] checkpoint save failed for %s", run_id, exc_info=True)
+
+
+def _evict_old_checkpoints() -> None:
+    """Remove checkpoint files older than TTL (best-effort, non-blocking)."""
+    try:
+        now = time.time()
+        for p in _CHECKPOINT_DIR.glob("*.json"):
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                if now - data.get("_ts", 0) > _CHECKPOINT_TTL:
+                    p.unlink(missing_ok=True)
+            except Exception:
+                logging.debug("[JarvisAgents] failed to evict checkpoint %s", p, exc_info=True)
+    except Exception:
+        logging.debug("[JarvisAgents] checkpoint eviction scan failed", exc_info=True)
+
+
+# ── AgentGraph (ADK-style graph-based workflows) ──────────────────────────────
+# A directed graph of agent nodes with explicit staged execution.
+# Stage 0: fast data-collection nodes (no LLM) — run in parallel.
+# Stage 1+: nodes that depend on stage 0 output — receive merged context.
+# Final stage: optional LLM synthesis node.
+#
+# This separates $0 instant nodes from expensive LLM calls and lets downstream
+# nodes consume upstream results (shared session context = ADK handoff pattern).
+
+class AgentGraph:
+    """Minimal ADK-style agent graph for staged, resumable multi-agent runs."""
+
+    def __init__(self, name: str = "graph"):
+        self.name = name
+        # stages: list of lists of agent names
+        # stage 0 runs first (parallel), stage 1 gets stage-0 output as context, etc.
+        self._stages: list[list[str]] = []
+        # shared session context — passed between stages (ADK handoff pattern)
+        self._session: dict = {}
+
+    def stage(self, *agents: str) -> "AgentGraph":
+        """Add a parallel stage. Returns self for chaining."""
+        self._stages.append(list(agents))
+        return self
+
+    def run(self, context: str = "", resume: bool = True) -> list[dict]:
+        """Execute all stages in order, with optional checkpoint resume."""
+        all_agents = [a for stage in self._stages for a in stage]
+        run_id = _run_id(all_agents)
+        completed = _load_checkpoint(run_id) if resume else {}
+        all_results: list[dict] = list(completed.values())
+
+        for stage_idx, stage_agents in enumerate(self._stages):
+            pending = [a for a in stage_agents if a not in completed]
+            if not pending:
+                continue
+
+            # Build context for this stage: original context + prior stage output
+            stage_context = context
+            if stage_idx > 0 and all_results:
+                prior_text = _merge_results_raw(all_results)
+                stage_context = f"{context}\n\nPrior context:\n{prior_text}".strip()
+            elif self._session:
+                stage_context = (context + "\n" + json.dumps(self._session)).strip()
+
+            # Run pending nodes in this stage concurrently
+            stage_results: list[dict] = []
+            with ThreadPoolExecutor(max_workers=min(_MAX_WORKERS, len(pending))) as pool:
+                futures = {
+                    pool.submit(_AGENTS.get(a, _unknown_agent(a)), stage_context): a
+                    for a in pending
+                }
+                for future in as_completed(futures, timeout=_AGENT_TIMEOUT * 2):
+                    a_name = futures[future]
+                    try:
+                        r = future.result(timeout=_AGENT_TIMEOUT)
+                    except Exception as exc:
+                        r = {"agent": a_name, "status": "error",
+                             "result": f"{a_name} timed out: {exc}", "escalate": False}
+                    stage_results.append(r)
+                    completed[a_name] = r
+                    # Update shared session state with this agent's output
+                    self._session[a_name] = r.get("result", "")
+
+            all_results.extend(stage_results)
+            _save_checkpoint(run_id, completed)
+
+        threading.Thread(target=_evict_old_checkpoints, daemon=True).start()
+        return all_results
+
+
+def _merge_results_raw(results: list[dict]) -> str:
+    """Merge agent results to a plain string (no LLM, used for stage handoff)."""
+    parts = [r["result"] for r in results if r.get("status") == "ok" and r.get("result")]
+    return "\n\n".join(parts)
+
+
+# ── Dispatcher ────────────────────────────────────────────────────────────────
+
+def dispatch_single(agent: str, context: str = "") -> dict:
+    """Run one agent synchronously."""
+    fn = _AGENTS.get(agent)
+    if not fn:
+        return {"agent": agent, "status": "error",
+                "result": f"Unknown agent: {agent}", "escalate": False}
+    return fn(context)
+
+
+def dispatch_parallel(agents: list[str], context: str = "") -> list[dict]:
+    """Run multiple agents concurrently and return all results."""
+    results: list[dict] = []
+    with ThreadPoolExecutor(max_workers=min(_MAX_WORKERS, len(agents))) as pool:
+        futures = {pool.submit(_AGENTS.get(a, _unknown_agent(a)), context): a for a in agents}
+        for future in as_completed(futures, timeout=_AGENT_TIMEOUT * 2):
+            try:
+                results.append(future.result(timeout=_AGENT_TIMEOUT))
+            except Exception as e:
+                agent_name = futures[future]
+                results.append({"agent": agent_name, "status": "error",
+                                 "result": f"{agent_name} timed out: {e}", "escalate": False})
+    return results
+
+
+def _unknown_agent(name: str) -> Callable[[str], dict]:
+    def _fn(context: str = "") -> dict:
+        return {"agent": name, "status": "error",
+                "result": f"No agent registered for '{name}'.", "escalate": False}
+    return _fn
+
+
+# ── Synthesiser ───────────────────────────────────────────────────────────────
+
+def _merge_results(results: list[dict], include_errors: bool = False) -> str:
+    """Merge agent results into a clean briefing string."""
+    escalations: list[str] = []
+    sections: list[str] = []
+    errors: list[str] = []
+
+    for r in results:
+        if r["status"] == "error":
+            if include_errors:
+                errors.append(r["result"])
+            continue
+        text = r.get("result", "").strip()
+        if not text:
+            continue
+        if r.get("escalate"):
+            escalations.append(f"⚠️  {text}")
+        else:
+            sections.append(text)
+
+    lines: list[str] = []
+    if escalations:
+        lines.append("── Needs your attention ──")
+        lines.extend(escalations)
+        lines.append("")
+    lines.extend(sections)
+    if errors:
+        lines.append("\n── Agent errors ──")
+        lines.extend(errors)
+    return "\n\n".join(lines).strip()
+
+
+# ── LLM synthesis ─────────────────────────────────────────────────────────────
+
+_SYNTH_SYSTEM = (
+    "You are Jarvis, Aman's local-first AI runtime. "
+    "You speak in a calm, direct, slightly formal tone — think JARVIS from Iron Man, not a chatbot. "
+    "Convert the raw agent data below into a concise spoken briefing. "
+    "Use natural sentences. Do not use bullet points or markdown. "
+    "Prioritise urgent/escalated items first. "
+    "If calendar events are present, mention any events happening soon today. "
+    "Keep the total response under 120 words. "
+    "Start directly with the content — no 'Here is your briefing' preamble."
+)
+
+_SYNTH_ESCALATION_SYSTEM = (
+    "You are Jarvis. Convert the following raw escalation data into 1-3 spoken sentences "
+    "that tell Aman exactly what needs his attention right now. "
+    "Be direct. No bullet points. Under 60 words."
+)
+
+_EMAIL_DIGEST_SYSTEM = (
+    "You are Jarvis. Summarise the user's unread emails as exactly 3 bullet points. "
+    "Each bullet: sender name + one short phrase describing what the email is about. "
+    "Max 15 words per bullet. Start each bullet with '•'. No preamble, no trailing text."
+)
+
+
+def _synthesise(raw: str, system: str = _SYNTH_SYSTEM) -> str:
+    """Run raw agent output through the fastest available local model.
+
+    Falls back to returning the raw merged text if synthesis fails or times out.
+    Hard timeout: 8s so briefings never feel sluggish.
+    """
+    if not raw or not raw.strip():
+        return raw
+    try:
+        import model_router as mr
+
+        result_holder: list[str] = []
+
+        def _run():
+            try:
+                chunks: list[str] = []
+                # Inject synthesis persona via extra_system; raw data is the user turn
+                stream, _ = mr.smart_stream(
+                    raw,
+                    tool="briefing",
+                    extra_system=system,
+                )
+                for chunk in stream:
+                    chunks.append(chunk)
+                    if sum(len(c) for c in chunks) > 600:
+                        break
+                result_holder.append("".join(chunks).strip())
+            except Exception:
+                logging.warning("[JarvisAgents] synthesis LLM call failed", exc_info=True)
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        t.join(timeout=15.0)
+        if result_holder and result_holder[0]:
+            return result_holder[0]
+    except Exception:
+        logging.warning("[JarvisAgents] briefing synthesis wrapper failed", exc_info=True)
+    return raw
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
+
+def _trace_score_summary(last_n: int = 50) -> str:
+    try:
+        from eval_trace_score import format_trace_score_summary
+        return format_trace_score_summary(last_n=last_n)
+    except Exception:
+        logging.debug("[JarvisAgents] trace score summary unavailable", exc_info=True)
+        return ""
+
+
+def run_briefing() -> str:
+    """Full Iron Man morning briefing using a staged AgentGraph.
+
+    Stage 0 — fast data nodes (no LLM): weather, calendar, tasks, email, board.
+    Stage 1 — context-enriched node: vault (gets stage-0 output as context).
+    Final — LLM synthesis over all results.
+
+    Resumable: if the process crashed mid-briefing in the last 5 minutes,
+    completed nodes are skipped and results are reused from the checkpoint.
+    """
+    graph = (
+        AgentGraph("briefing")
+        .stage("weather", "calendar", "calendar_upcoming", "tasks", "email_urgent", "board", "pending_alerts")  # stage 0: fast, parallel
+        .stage("vault")                                             # stage 1: uses stage-0 context
+    )
+    results = graph.run()
+    body = _merge_results(results)
+    trace_summary = _trace_score_summary()
+    if not body:
+        briefing = "All clear. Nothing on the calendar or task list that needs attention."
+    else:
+        briefing = _synthesise(body)
+    if trace_summary:
+        return f"{briefing}\n\n{trace_summary}"
+    return briefing
+
+
+def run_parallel(agents: list[str], context: str = "") -> str:
+    """Run named agents in parallel and return merged result."""
+    if not agents:
+        return "No agents specified."
+    results = dispatch_parallel(agents, context=context)
+    raw = _merge_results(results)
+    return _synthesise(raw)
+
+
+def escalation_summary() -> str:
+    """Return only the items that need Aman's attention."""
+    results = dispatch_parallel(_BRIEFING_AGENTS)
+    escalations = [r for r in results if r.get("escalate") and r["status"] == "ok"]
+    if not escalations:
+        return "Nothing needs your attention right now."
+    raw = "\n".join(r["result"] for r in escalations)
+    return _synthesise(raw, system=_SYNTH_ESCALATION_SYSTEM)
+
+
+def week_ahead() -> str:
+    """What's coming up this week — calendar + open tasks, synthesised."""
+    results = dispatch_parallel(_WEEK_AGENTS)
+    raw = _merge_results(results)
+    if not raw:
+        return "Nothing scheduled or pending this week."
+    return _synthesise(
+        raw,
+        system=(
+            "You are Jarvis. Summarise the week ahead for Aman in 2-4 natural spoken sentences. "
+            "Mention the number of events, any deadlines or tasks, and flag anything urgent. "
+            "No bullet points. Under 80 words."
+        ),
+    )
+
+
+def meeting_prep() -> str:
+    """Pull the next meeting details and brain context, synthesised as a spoken prep brief."""
+    results = dispatch_parallel(_MEETING_PREP_AGENTS)
+    raw = _merge_results(results)
+    if not raw or "No upcoming meetings" in raw:
+        return "You don't have any upcoming meetings on the calendar."
+    return _synthesise(
+        raw,
+        system=(
+            "You are Jarvis. Prepare Aman for his next meeting in 3-5 spoken sentences. "
+            "Mention who he's meeting, what it's about, any relevant context from his notes. "
+            "Close with one thing he should have ready or know going in. "
+            "No bullet points. Under 100 words. Sound like JARVIS from Iron Man."
+        ),
+    )
+
+
+def email_digest() -> str:
+    """3-bullet summary of today's unread emails, synthesised locally."""
+    try:
+        gs = _safe_import("google_services")
+        if not gs or not hasattr(gs, "get_unread_email_subjects"):
+            return "Email is not connected. You may need to re-authorize Google access."
+        emails = gs.get_unread_email_subjects(max_results=5)
+        if not emails:
+            return "No unread emails."
+        lines = [
+            f"From {e['sender']}: {e['subject']}. {e['snippet']}"
+            for e in emails[:5]
+        ]
+        raw = f"Unread emails ({len(emails)}):\n" + "\n".join(f"  {l}" for l in lines)
+        result = _synthesise(raw, system=_EMAIL_DIGEST_SYSTEM)
+        return result if result.strip() else raw
+    except Exception as e:
+        return f"Email digest unavailable: {e}"
+
+
+def research_and_brief(topic: str) -> str:
+    """Run research agent on a topic and return the briefing."""
+    return run_parallel(["research", "vault"], context=topic)
+
+
+_FOCUS_AGENTS = ["calendar", "tasks", "vault"]
+
+_FOCUS_SYSTEM = (
+    "You are Jarvis. Based on Aman's calendar events, open tasks, and active vault "
+    "context, give a crisp spoken focus recommendation for right now. "
+    "Name the single highest-priority item he should work on and briefly why. "
+    "If there's a meeting soon, mention it. If something is overdue, flag it first. "
+    "Close with one sentence acknowledging anything that can safely wait. "
+    "Maximum 80 words. No bullet points. Sound like JARVIS from Iron Man — "
+    "calm, direct, and operating with full situational awareness."
+)
+
+
+def focus_advisor() -> str:
+    """What should Aman work on right now? Calendar + tasks + vault synthesised."""
+    results = dispatch_parallel(_FOCUS_AGENTS)
+    raw = _merge_results(results)
+    if not raw:
+        return "Your calendar and task list are clear. Good time for deep work or a break."
+    return _synthesise(raw, system=_FOCUS_SYSTEM)
+
+
+# ── Daily note ────────────────────────────────────────────────────────────────
+
+_DAILY_NOTES_DIR = "daily"   # vault/daily/<YYYY-MM-DD>.md
+
+
+def write_daily_note(briefing_text: str = "", focus_text: str = "") -> dict:
+    """Create today's daily note in vault/daily/YYYY-MM-DD.md.
+
+    Populates Calendar and Focus sections from agent output.
+    Idempotent — if the note already exists it appends only missing sections.
+    Returns {"ok": bool, "path": str, "action": str}.
+    """
+    import datetime
+    import vault
+
+    today = datetime.date.today().isoformat()        # "2026-04-24"
+    daily_dir = vault.VAULT_ROOT / _DAILY_NOTES_DIR
+    daily_dir.mkdir(parents=True, exist_ok=True)
+
+    note_path = daily_dir / f"{today}.md"
+
+    # Build the note body from template
+    calendar_section = ""
+    tasks_section    = ""
+
+    # Extract calendar and tasks from briefing_text heuristically
+    lines = briefing_text.splitlines() if briefing_text else []
+    cal_lines: list[str] = []
+    task_lines: list[str] = []
+    for line in lines:
+        ll = line.lower()
+        if any(kw in ll for kw in ("meeting", "event", "calendar", "appointment", "call", "interview")):
+            cal_lines.append(f"- {line.strip()}")
+        elif any(kw in ll for kw in ("task", "todo", "[ ]", "action")):
+            task_lines.append(f"- {line.strip()}")
+
+    calendar_section = "\n".join(cal_lines) if cal_lines else "_No events pulled._"
+    tasks_section    = "\n".join(task_lines) if task_lines else "_No tasks pulled._"
+    focus_block      = focus_text.strip() if focus_text else "_Run 'focus advisor' for today's priority._"
+
+    frontmatter = (
+        f"---\n"
+        f"type: daily-note\n"
+        f"date: {today}\n"
+        f"tags: [daily, brain]\n"
+        f"---\n\n"
+    )
+    body = (
+        f"# {today}\n\n"
+        f"## Focus\n\n{focus_block}\n\n"
+        f"## Calendar\n\n{calendar_section}\n\n"
+        f"## Open Tasks\n\n{tasks_section}\n\n"
+        f"## Notes\n\n\n"
+        f"## End of Day\n\n\n"
+    )
+
+    if note_path.exists():
+        return {"ok": True, "path": str(note_path), "action": "already_exists"}
+
+    note_path.write_text(frontmatter + body, encoding="utf-8")
+    return {"ok": True, "path": str(note_path), "action": "created"}

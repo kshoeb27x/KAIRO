@@ -1,0 +1,6122 @@
+{
+  "project": "KAIRO",
+  "mode": "READ-ONLY",
+  "execution": false,
+  "repositories": [
+    {
+      "repository": "Awesome-Personal-AI",
+      "projects": []
+    },
+    {
+      "repository": "memU",
+      "projects": [
+        {
+          "project": "memU",
+          "path": ".",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 36,
+            "Agent": 50,
+            "Memory": 100,
+            "RAG": 117,
+            "Browser": 1,
+            "Computer Use": 9,
+            "Tools": 23,
+            "Workflow": 39,
+            "Database": 71,
+            "Voice": 3,
+            "API": 60,
+            "Security": 35
+          }
+        },
+        {
+          "project": "npm",
+          "path": "npm",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 2,
+            "Memory": 4,
+            "RAG": 3,
+            "Database": 3,
+            "API": 2
+          }
+        }
+      ]
+    },
+    {
+      "repository": "MIRA",
+      "projects": [
+        {
+          "project": "MIRA",
+          "path": ".",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 105,
+            "Agent": 62,
+            "Memory": 55,
+            "RAG": 34,
+            "Browser": 24,
+            "Computer Use": 5,
+            "Tools": 115,
+            "Workflow": 36,
+            "Database": 17,
+            "Voice": 85,
+            "API": 139,
+            "Security": 138
+          }
+        },
+        {
+          "project": "e2e",
+          "path": "e2e",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 45,
+            "Agent": 8,
+            "Memory": 21,
+            "RAG": 8,
+            "Browser": 13,
+            "Computer Use": 1,
+            "Tools": 29,
+            "Voice": 39,
+            "API": 46,
+            "Security": 37
+          }
+        },
+        {
+          "project": "demo-hello",
+          "path": "examples\\apps\\demo-hello",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "Tools": 2,
+            "Security": 1
+          }
+        },
+        {
+          "project": "home-assistant",
+          "path": "examples\\apps\\home-assistant",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "Tools": 2,
+            "API": 2,
+            "Security": 5
+          }
+        },
+        {
+          "project": "wazuh",
+          "path": "examples\\apps\\wazuh",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "Agent": 2,
+            "Memory": 1,
+            "Tools": 2,
+            "API": 2,
+            "Security": 5
+          }
+        },
+        {
+          "project": "web",
+          "path": "web",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 16,
+            "Agent": 20,
+            "Memory": 17,
+            "RAG": 9,
+            "Browser": 15,
+            "Computer Use": 6,
+            "Tools": 26,
+            "Workflow": 8,
+            "Database": 1,
+            "Voice": 33,
+            "API": 133,
+            "Security": 38
+          }
+        }
+      ]
+    },
+    {
+      "repository": "OCT-Agent",
+      "projects": [
+        {
+          "project": "OCT-Agent",
+          "path": ".",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 25,
+            "Agent": 97,
+            "Memory": 70,
+            "RAG": 25,
+            "Browser": 15,
+            "Computer Use": 50,
+            "Tools": 63,
+            "Workflow": 29,
+            "Database": 14,
+            "Voice": 6,
+            "API": 74,
+            "Security": 37
+          }
+        },
+        {
+          "project": "cli",
+          "path": "packages\\cli",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 5,
+            "Agent": 6,
+            "Memory": 9,
+            "RAG": 2,
+            "Browser": 2,
+            "Computer Use": 2,
+            "Tools": 1,
+            "API": 8,
+            "Security": 5
+          }
+        },
+        {
+          "project": "desktop",
+          "path": "packages\\desktop",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 20,
+            "Agent": 74,
+            "Memory": 57,
+            "RAG": 18,
+            "Browser": 11,
+            "Computer Use": 28,
+            "Tools": 67,
+            "Workflow": 12,
+            "Database": 3,
+            "Voice": 6,
+            "API": 65,
+            "Security": 43
+          }
+        }
+      ]
+    },
+    {
+      "repository": "Open-Computer-Use",
+      "projects": [
+        {
+          "project": "Open-Computer-Use",
+          "path": ".",
+          "type": [
+            "Python",
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 35,
+            "Agent": 44,
+            "Memory": 37,
+            "RAG": 34,
+            "Browser": 29,
+            "Computer Use": 52,
+            "Tools": 82,
+            "Workflow": 32,
+            "Database": 16,
+            "Voice": 19,
+            "API": 108,
+            "Security": 121
+          }
+        },
+        {
+          "project": "computer-use-server",
+          "path": "computer-use-server",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 26,
+            "Agent": 33,
+            "Memory": 32,
+            "RAG": 24,
+            "Browser": 17,
+            "Computer Use": 28,
+            "Tools": 56,
+            "Workflow": 7,
+            "Database": 3,
+            "Voice": 19,
+            "API": 71,
+            "Security": 62
+          }
+        },
+        {
+          "project": "settings-wrapper",
+          "path": "settings-wrapper",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "Agent": 1,
+            "RAG": 1,
+            "Browser": 2,
+            "Computer Use": 2,
+            "Tools": 2,
+            "Workflow": 1,
+            "Database": 2,
+            "API": 6,
+            "Security": 4
+          }
+        },
+        {
+          "project": "scripts",
+          "path": "skills\\examples\\mcp-builder\\scripts",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 1,
+            "Memory": 1,
+            "RAG": 1,
+            "Tools": 7,
+            "API": 2,
+            "Security": 2
+          }
+        },
+        {
+          "project": "slack-gif-creator",
+          "path": "skills\\examples\\slack-gif-creator",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "RAG": 1,
+            "Tools": 2,
+            "Workflow": 1,
+            "API": 1
+          }
+        }
+      ]
+    },
+    {
+      "repository": "OpenMind",
+      "projects": [
+        {
+          "project": "OpenMind",
+          "path": ".",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 44,
+            "Agent": 59,
+            "Memory": 71,
+            "RAG": 44,
+            "Browser": 25,
+            "Computer Use": 27,
+            "Tools": 66,
+            "Workflow": 41,
+            "Database": 27,
+            "Voice": 38,
+            "API": 77,
+            "Security": 94
+          }
+        },
+        {
+          "project": "cerebral",
+          "path": "cerebral",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 43,
+            "Agent": 13,
+            "Memory": 39,
+            "RAG": 24,
+            "Browser": 17,
+            "Computer Use": 24,
+            "Tools": 55,
+            "Workflow": 16,
+            "Database": 22,
+            "Voice": 39,
+            "API": 55,
+            "Security": 59
+          }
+        },
+        {
+          "project": "tray",
+          "path": "tray",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 9,
+            "Agent": 3,
+            "Memory": 16,
+            "RAG": 19,
+            "Browser": 15,
+            "Computer Use": 11,
+            "Tools": 38,
+            "Workflow": 3,
+            "Database": 4,
+            "Voice": 12,
+            "API": 35,
+            "Security": 29
+          }
+        }
+      ]
+    },
+    {
+      "repository": "Repos",
+      "projects": [
+        {
+          "project": "134ertel-JARVIS",
+          "path": "134ertel-JARVIS",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 24,
+            "Agent": 4,
+            "Memory": 39,
+            "RAG": 13,
+            "Browser": 7,
+            "Computer Use": 20,
+            "Tools": 17,
+            "Workflow": 7,
+            "Voice": 61,
+            "API": 55,
+            "Security": 52
+          }
+        },
+        {
+          "project": "backend",
+          "path": "134ertel-JARVIS\\backend",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 18,
+            "Agent": 1,
+            "Memory": 20,
+            "RAG": 5,
+            "Browser": 3,
+            "Computer Use": 12,
+            "Tools": 10,
+            "Workflow": 2,
+            "Voice": 30,
+            "API": 37,
+            "Security": 34
+          }
+        },
+        {
+          "project": "frontend",
+          "path": "134ertel-JARVIS\\frontend",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 2,
+            "Memory": 18,
+            "RAG": 9,
+            "Browser": 2,
+            "Computer Use": 2,
+            "Tools": 2,
+            "Workflow": 4,
+            "Voice": 38,
+            "API": 33,
+            "Security": 18
+          }
+        },
+        {
+          "project": "agent-zero",
+          "path": "agent-zero",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 16,
+            "Agent": 72,
+            "Memory": 33,
+            "RAG": 23,
+            "Browser": 18,
+            "Computer Use": 8,
+            "Tools": 69,
+            "Workflow": 23,
+            "Database": 2,
+            "Voice": 5,
+            "API": 79,
+            "Security": 79
+          }
+        },
+        {
+          "project": "_telegram_integration",
+          "path": "agent-zero\\plugins\\_telegram_integration",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 19,
+            "Memory": 17,
+            "RAG": 2,
+            "Browser": 1,
+            "Computer Use": 9,
+            "Tools": 16,
+            "Voice": 7,
+            "API": 12,
+            "Security": 10
+          }
+        },
+        {
+          "project": "whatsapp-bridge",
+          "path": "agent-zero\\plugins\\_whatsapp_integration\\whatsapp-bridge",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "Agent": 2,
+            "Memory": 2,
+            "Browser": 1,
+            "Tools": 1,
+            "Voice": 3,
+            "API": 5,
+            "Security": 1
+          }
+        },
+        {
+          "project": "amanimran786-jarvis-ai",
+          "path": "amanimran786-jarvis-ai",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 118,
+            "Agent": 97,
+            "Memory": 99,
+            "RAG": 68,
+            "Browser": 22,
+            "Computer Use": 32,
+            "Tools": 81,
+            "Workflow": 49,
+            "Database": 25,
+            "Voice": 114,
+            "API": 102,
+            "Security": 120
+          }
+        },
+        {
+          "project": "Ambidiosidad-Jarvis",
+          "path": "Ambidiosidad-Jarvis",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 29,
+            "Agent": 3,
+            "Memory": 31,
+            "RAG": 35,
+            "Browser": 3,
+            "Computer Use": 4,
+            "Tools": 7,
+            "Workflow": 11,
+            "Database": 11,
+            "Voice": 12,
+            "API": 38,
+            "Security": 31
+          }
+        },
+        {
+          "project": "admin",
+          "path": "Ambidiosidad-Jarvis\\admin",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 27,
+            "Agent": 2,
+            "Memory": 31,
+            "RAG": 31,
+            "Browser": 2,
+            "Computer Use": 1,
+            "Tools": 6,
+            "Workflow": 6,
+            "Database": 11,
+            "Voice": 6,
+            "API": 40,
+            "Security": 15
+          }
+        },
+        {
+          "project": "brain",
+          "path": "Ambidiosidad-Jarvis\\extensions\\brain",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 6,
+            "Memory": 7,
+            "RAG": 2,
+            "Tools": 5,
+            "Workflow": 1,
+            "Voice": 4,
+            "API": 8
+          }
+        },
+        {
+          "project": "memory",
+          "path": "Ambidiosidad-Jarvis\\extensions\\memory",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Memory": 6,
+            "RAG": 4,
+            "Workflow": 1,
+            "Database": 4,
+            "API": 7
+          }
+        },
+        {
+          "project": "motors",
+          "path": "Ambidiosidad-Jarvis\\extensions\\motors",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "API": 2
+          }
+        },
+        {
+          "project": "vision",
+          "path": "Ambidiosidad-Jarvis\\extensions\\vision",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "API": 2
+          }
+        },
+        {
+          "project": "voice",
+          "path": "Ambidiosidad-Jarvis\\extensions\\voice",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Computer Use": 1,
+            "Voice": 9,
+            "API": 2
+          }
+        },
+        {
+          "project": "anything-llm",
+          "path": "anything-llm",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 57,
+            "Agent": 18,
+            "Memory": 13,
+            "RAG": 41,
+            "Browser": 13,
+            "Computer Use": 8,
+            "Tools": 17,
+            "Workflow": 15,
+            "Database": 4,
+            "Voice": 12,
+            "API": 80,
+            "Security": 57
+          }
+        },
+        {
+          "project": "collector",
+          "path": "anything-llm\\collector",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 21,
+            "Agent": 4,
+            "Memory": 8,
+            "RAG": 38,
+            "Browser": 7,
+            "Tools": 3,
+            "Workflow": 3,
+            "Voice": 19,
+            "API": 85,
+            "Security": 51
+          }
+        },
+        {
+          "project": "frontend",
+          "path": "anything-llm\\frontend",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 40,
+            "Agent": 9,
+            "Memory": 14,
+            "RAG": 25,
+            "Browser": 6,
+            "Computer Use": 4,
+            "Tools": 20,
+            "Workflow": 1,
+            "Database": 3,
+            "Voice": 10,
+            "API": 57,
+            "Security": 23
+          }
+        },
+        {
+          "project": "cli",
+          "path": "anything-llm\\open-computer\\cli",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 12,
+            "Memory": 1,
+            "RAG": 4,
+            "Browser": 1,
+            "Computer Use": 3,
+            "Tools": 1,
+            "Workflow": 1,
+            "API": 4,
+            "Security": 1
+          }
+        },
+        {
+          "project": "interface-service",
+          "path": "anything-llm\\open-computer\\services\\interface-service",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 21,
+            "Agent": 36,
+            "Memory": 14,
+            "RAG": 1,
+            "Browser": 9,
+            "Computer Use": 14,
+            "Tools": 26,
+            "Workflow": 9,
+            "API": 20,
+            "Security": 9
+          }
+        },
+        {
+          "project": "memory-manager",
+          "path": "anything-llm\\open-computer\\services\\memory-manager",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "Agent": 2,
+            "Memory": 7,
+            "Tools": 1,
+            "API": 3
+          }
+        },
+        {
+          "project": "server",
+          "path": "anything-llm\\server",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 45,
+            "Agent": 36,
+            "Memory": 21,
+            "RAG": 45,
+            "Browser": 6,
+            "Computer Use": 1,
+            "Tools": 18,
+            "Workflow": 1,
+            "Database": 12,
+            "Voice": 15,
+            "API": 105,
+            "Security": 31
+          }
+        },
+        {
+          "project": "AstinLinson-JARVIS",
+          "path": "AstinLinson-JARVIS",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 40,
+            "Agent": 6,
+            "Memory": 48,
+            "RAG": 10,
+            "Browser": 9,
+            "Computer Use": 29,
+            "Tools": 19,
+            "Workflow": 22,
+            "Database": 2,
+            "Voice": 80,
+            "API": 21,
+            "Security": 4
+          }
+        },
+        {
+          "project": "JARVIS",
+          "path": "AstinLinson-JARVIS\\JARVIS",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 38,
+            "Agent": 4,
+            "Memory": 46,
+            "RAG": 10,
+            "Browser": 8,
+            "Computer Use": 30,
+            "Tools": 18,
+            "Workflow": 19,
+            "Database": 2,
+            "Voice": 76,
+            "API": 21,
+            "Security": 4
+          }
+        },
+        {
+          "project": "JARVIS",
+          "path": "AstinLinson-JARVIS\\JARVIS\\JARVIS",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 22,
+            "Agent": 2,
+            "Memory": 24,
+            "RAG": 5,
+            "Browser": 4,
+            "Computer Use": 17,
+            "Tools": 10,
+            "Workflow": 14,
+            "Database": 1,
+            "Voice": 53,
+            "API": 12,
+            "Security": 2
+          }
+        },
+        {
+          "project": "browser-use",
+          "path": "browser-use",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 82,
+            "Agent": 67,
+            "Memory": 55,
+            "RAG": 30,
+            "Browser": 93,
+            "Computer Use": 51,
+            "Tools": 81,
+            "Workflow": 9,
+            "Database": 1,
+            "Voice": 5,
+            "API": 65,
+            "Security": 74
+          }
+        },
+        {
+          "project": "isair-Jarvis",
+          "path": "isair-Jarvis",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 113,
+            "Agent": 19,
+            "Memory": 94,
+            "RAG": 63,
+            "Browser": 9,
+            "Computer Use": 32,
+            "Tools": 98,
+            "Workflow": 19,
+            "Database": 28,
+            "Voice": 120,
+            "API": 94,
+            "Security": 29
+          }
+        },
+        {
+          "project": "jmtitan-Jarvis",
+          "path": "jmtitan-Jarvis",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 34,
+            "Agent": 1,
+            "Memory": 67,
+            "RAG": 31,
+            "Computer Use": 15,
+            "Tools": 1,
+            "Workflow": 2,
+            "Voice": 84,
+            "API": 30,
+            "Security": 5
+          }
+        },
+        {
+          "project": "core",
+          "path": "jmtitan-Jarvis\\core",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 17,
+            "Memory": 31,
+            "RAG": 14,
+            "Computer Use": 3,
+            "Voice": 16,
+            "API": 11,
+            "Security": 3
+          }
+        },
+        {
+          "project": "LibreChat",
+          "path": "LibreChat",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 41,
+            "Agent": 36,
+            "Memory": 44,
+            "RAG": 37,
+            "Browser": 20,
+            "Computer Use": 5,
+            "Tools": 38,
+            "Workflow": 63,
+            "Database": 43,
+            "Voice": 13,
+            "API": 120,
+            "Security": 118
+          }
+        },
+        {
+          "project": "api",
+          "path": "LibreChat\\api",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 58,
+            "Agent": 73,
+            "Memory": 42,
+            "RAG": 20,
+            "Browser": 1,
+            "Computer Use": 1,
+            "Tools": 83,
+            "Workflow": 1,
+            "Database": 27,
+            "Voice": 14,
+            "API": 116,
+            "Security": 51
+          }
+        },
+        {
+          "project": "client",
+          "path": "LibreChat\\client",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 12,
+            "Agent": 58,
+            "Memory": 36,
+            "RAG": 14,
+            "Browser": 5,
+            "Computer Use": 16,
+            "Tools": 28,
+            "Workflow": 1,
+            "Database": 1,
+            "Voice": 11,
+            "API": 49,
+            "Security": 31
+          }
+        },
+        {
+          "project": "langfuse-fanout",
+          "path": "LibreChat\\otel\\langfuse-fanout",
+          "type": [
+            "Go"
+          ],
+          "capabilities": {
+            "Agent": 1,
+            "Memory": 5,
+            "RAG": 4,
+            "Workflow": 1,
+            "Database": 4,
+            "Voice": 2,
+            "API": 12,
+            "Security": 11
+          }
+        },
+        {
+          "project": "api",
+          "path": "LibreChat\\packages\\api",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 26,
+            "Agent": 65,
+            "Memory": 39,
+            "RAG": 15,
+            "Tools": 49,
+            "Database": 23,
+            "Voice": 18,
+            "API": 109,
+            "Security": 80
+          }
+        },
+        {
+          "project": "client",
+          "path": "LibreChat\\packages\\client",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 2,
+            "Memory": 8,
+            "RAG": 5,
+            "Browser": 2,
+            "Computer Use": 12,
+            "Tools": 6,
+            "Voice": 2,
+            "API": 16,
+            "Security": 8
+          }
+        },
+        {
+          "project": "data-provider",
+          "path": "LibreChat\\packages\\data-provider",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 73,
+            "Agent": 74,
+            "Memory": 45,
+            "RAG": 25,
+            "Browser": 10,
+            "Computer Use": 2,
+            "Tools": 54,
+            "Workflow": 5,
+            "Database": 11,
+            "Voice": 27,
+            "API": 118,
+            "Security": 70
+          }
+        },
+        {
+          "project": "react-query",
+          "path": "LibreChat\\packages\\data-provider\\react-query",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "Agent": 1,
+            "Tools": 1
+          }
+        },
+        {
+          "project": "data-schemas",
+          "path": "LibreChat\\packages\\data-schemas",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 23,
+            "Agent": 46,
+            "Memory": 35,
+            "RAG": 19,
+            "Tools": 25,
+            "Workflow": 8,
+            "Database": 59,
+            "Voice": 11,
+            "API": 76,
+            "Security": 51
+          }
+        },
+        {
+          "project": "luccientertainment-Jarvis",
+          "path": "luccientertainment-Jarvis",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 43,
+            "Agent": 26,
+            "Memory": 38,
+            "RAG": 39,
+            "Browser": 6,
+            "Computer Use": 6,
+            "Tools": 29,
+            "Workflow": 11,
+            "Database": 3,
+            "Voice": 83,
+            "API": 42,
+            "Security": 16
+          }
+        },
+        {
+          "project": "frontend",
+          "path": "luccientertainment-Jarvis\\frontend",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "Browser": 2,
+            "Tools": 3,
+            "Workflow": 1,
+            "Voice": 1,
+            "API": 1
+          }
+        },
+        {
+          "project": "Nitro70-ai-jarvis",
+          "path": "Nitro70-ai-jarvis",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 71,
+            "Agent": 20,
+            "Memory": 44,
+            "RAG": 6,
+            "Browser": 14,
+            "Computer Use": 7,
+            "Tools": 86,
+            "Workflow": 8,
+            "Voice": 78,
+            "API": 66,
+            "Security": 25
+          }
+        },
+        {
+          "project": "dotnet",
+          "path": "Nitro70-ai-jarvis\\dotnet",
+          "type": [
+            "C#"
+          ],
+          "capabilities": {
+            "LLM": 46,
+            "Agent": 16,
+            "Memory": 34,
+            "RAG": 6,
+            "Browser": 10,
+            "Computer Use": 3,
+            "Tools": 67,
+            "Workflow": 2,
+            "Voice": 53,
+            "API": 52,
+            "Security": 22
+          }
+        },
+        {
+          "project": "Jarvis.App",
+          "path": "Nitro70-ai-jarvis\\dotnet\\src\\Jarvis.App",
+          "type": [
+            "C#"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 2,
+            "Memory": 3,
+            "Browser": 1,
+            "Computer Use": 1,
+            "Tools": 11,
+            "Voice": 7,
+            "API": 7
+          }
+        },
+        {
+          "project": "Jarvis.Core",
+          "path": "Nitro70-ai-jarvis\\dotnet\\src\\Jarvis.Core",
+          "type": [
+            "C#"
+          ],
+          "capabilities": {
+            "LLM": 24,
+            "Agent": 7,
+            "Memory": 16,
+            "RAG": 3,
+            "Browser": 4,
+            "Computer Use": 1,
+            "Tools": 35,
+            "Workflow": 2,
+            "Voice": 31,
+            "API": 27,
+            "Security": 14
+          }
+        },
+        {
+          "project": "Jarvis.Installer.NET",
+          "path": "Nitro70-ai-jarvis\\dotnet\\src\\Jarvis.Installer.NET",
+          "type": [
+            "C#"
+          ],
+          "capabilities": {
+            "LLM": 9,
+            "Agent": 3,
+            "Memory": 5,
+            "RAG": 1,
+            "Browser": 3,
+            "Computer Use": 1,
+            "Tools": 11,
+            "Voice": 4,
+            "API": 10,
+            "Security": 3
+          }
+        },
+        {
+          "project": "Jarvis.Settings.NET",
+          "path": "Nitro70-ai-jarvis\\dotnet\\src\\Jarvis.Settings.NET",
+          "type": [
+            "C#"
+          ],
+          "capabilities": {
+            "LLM": 8,
+            "Agent": 4,
+            "Memory": 9,
+            "RAG": 2,
+            "Browser": 1,
+            "Tools": 6,
+            "Voice": 3,
+            "API": 7,
+            "Security": 5
+          }
+        },
+        {
+          "project": "Jarvis.Setup.NET",
+          "path": "Nitro70-ai-jarvis\\dotnet\\src\\Jarvis.Setup.NET",
+          "type": [
+            "C#"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Memory": 1,
+            "Browser": 1,
+            "Tools": 4,
+            "Voice": 8,
+            "API": 1
+          }
+        },
+        {
+          "project": "installer",
+          "path": "Nitro70-ai-jarvis\\installer",
+          "type": [
+            "C#"
+          ],
+          "capabilities": {
+            "LLM": 21,
+            "Agent": 7,
+            "Memory": 22,
+            "RAG": 4,
+            "Browser": 6,
+            "Computer Use": 3,
+            "Tools": 25,
+            "Workflow": 2,
+            "Voice": 19,
+            "API": 16,
+            "Security": 5
+          }
+        },
+        {
+          "project": "Jarvis.Installer",
+          "path": "Nitro70-ai-jarvis\\installer\\src\\Jarvis.Installer",
+          "type": [
+            "C#"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Memory": 2,
+            "Browser": 1,
+            "Tools": 6,
+            "Voice": 2,
+            "API": 3
+          }
+        },
+        {
+          "project": "Jarvis.Settings",
+          "path": "Nitro70-ai-jarvis\\installer\\src\\Jarvis.Settings",
+          "type": [
+            "C#"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Memory": 3,
+            "Computer Use": 1,
+            "Tools": 2,
+            "Voice": 1,
+            "API": 1,
+            "Security": 1
+          }
+        },
+        {
+          "project": "Jarvis.Setup",
+          "path": "Nitro70-ai-jarvis\\installer\\src\\Jarvis.Setup",
+          "type": [
+            "C#"
+          ],
+          "capabilities": {
+            "LLM": 16,
+            "Agent": 7,
+            "Memory": 16,
+            "RAG": 4,
+            "Browser": 5,
+            "Computer Use": 2,
+            "Tools": 15,
+            "Voice": 15,
+            "API": 11,
+            "Security": 4
+          }
+        },
+        {
+          "project": "open-interpreter",
+          "path": "open-interpreter",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 35,
+            "Agent": 22,
+            "Memory": 17,
+            "RAG": 9,
+            "Browser": 7,
+            "Computer Use": 6,
+            "Tools": 36,
+            "Workflow": 25,
+            "Database": 1,
+            "Voice": 3,
+            "API": 62,
+            "Security": 54
+          }
+        },
+        {
+          "project": "codex-install",
+          "path": "open-interpreter\\.devcontainer\\codex-install",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Voice": 1
+          }
+        },
+        {
+          "project": "codex-cli",
+          "path": "open-interpreter\\codex-cli",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 4,
+            "Agent": 2,
+            "RAG": 1,
+            "Tools": 1,
+            "API": 2
+          }
+        },
+        {
+          "project": "codex-rs",
+          "path": "open-interpreter\\codex-rs",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 19,
+            "Agent": 50,
+            "Memory": 35,
+            "RAG": 15,
+            "Browser": 3,
+            "Computer Use": 8,
+            "Tools": 62,
+            "Workflow": 1,
+            "Database": 16,
+            "Voice": 21,
+            "API": 96,
+            "Security": 81
+          }
+        },
+        {
+          "project": "acp-server",
+          "path": "open-interpreter\\codex-rs\\acp-server",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 2,
+            "Memory": 1,
+            "Tools": 2,
+            "Voice": 1,
+            "API": 3,
+            "Security": 3
+          }
+        },
+        {
+          "project": "agent-graph-store",
+          "path": "open-interpreter\\codex-rs\\agent-graph-store",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Agent": 7,
+            "Memory": 1,
+            "RAG": 2,
+            "Database": 1
+          }
+        },
+        {
+          "project": "agent-identity",
+          "path": "open-interpreter\\codex-rs\\agent-identity",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 2,
+            "Memory": 1,
+            "RAG": 1,
+            "Tools": 1,
+            "API": 3,
+            "Security": 3
+          }
+        },
+        {
+          "project": "agent-roles",
+          "path": "open-interpreter\\codex-rs\\agent-roles",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Agent": 7,
+            "Tools": 1,
+            "Security": 2
+          }
+        },
+        {
+          "project": "analytics",
+          "path": "open-interpreter\\codex-rs\\analytics",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 4,
+            "Agent": 12,
+            "Memory": 9,
+            "RAG": 1,
+            "Computer Use": 2,
+            "Tools": 15,
+            "Voice": 4,
+            "API": 19,
+            "Security": 19
+          }
+        },
+        {
+          "project": "ansi-escape",
+          "path": "open-interpreter\\codex-rs\\ansi-escape",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "API": 1
+          }
+        },
+        {
+          "project": "app-server",
+          "path": "open-interpreter\\codex-rs\\app-server",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 15,
+            "Agent": 34,
+            "Memory": 41,
+            "RAG": 10,
+            "Browser": 3,
+            "Computer Use": 9,
+            "Tools": 62,
+            "Workflow": 1,
+            "Database": 17,
+            "Voice": 19,
+            "API": 108,
+            "Security": 87
+          }
+        },
+        {
+          "project": "common",
+          "path": "open-interpreter\\codex-rs\\app-server\\tests\\common",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 4,
+            "Agent": 3,
+            "Memory": 10,
+            "RAG": 1,
+            "Tools": 8,
+            "Voice": 3,
+            "API": 17,
+            "Security": 16
+          }
+        },
+        {
+          "project": "app-server-client",
+          "path": "open-interpreter\\codex-rs\\app-server-client",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 3,
+            "Memory": 2,
+            "RAG": 3,
+            "Tools": 3,
+            "Workflow": 1,
+            "Database": 1,
+            "API": 10,
+            "Security": 6
+          }
+        },
+        {
+          "project": "app-server-daemon",
+          "path": "open-interpreter\\codex-rs\\app-server-daemon",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Agent": 2,
+            "Memory": 9,
+            "RAG": 1,
+            "Computer Use": 1,
+            "Tools": 1,
+            "API": 16
+          }
+        },
+        {
+          "project": "app-server-protocol",
+          "path": "open-interpreter\\codex-rs\\app-server-protocol",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 12,
+            "Agent": 22,
+            "Memory": 18,
+            "RAG": 12,
+            "Browser": 4,
+            "Computer Use": 14,
+            "Tools": 40,
+            "Database": 9,
+            "Voice": 13,
+            "API": 36,
+            "Security": 48
+          }
+        },
+        {
+          "project": "app-server-protocol-noop-macros",
+          "path": "open-interpreter\\codex-rs\\app-server-protocol-noop-macros",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "API": 2
+          }
+        },
+        {
+          "project": "app-server-test-client",
+          "path": "open-interpreter\\codex-rs\\app-server-test-client",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 5,
+            "Agent": 1,
+            "Memory": 6,
+            "RAG": 1,
+            "Browser": 1,
+            "Tools": 8,
+            "API": 18,
+            "Security": 6
+          }
+        },
+        {
+          "project": "app-server-transport",
+          "path": "open-interpreter\\codex-rs\\app-server-transport",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 15,
+            "Agent": 4,
+            "Memory": 7,
+            "RAG": 2,
+            "Computer Use": 1,
+            "Tools": 1,
+            "Database": 4,
+            "API": 37,
+            "Security": 39
+          }
+        },
+        {
+          "project": "apply-patch",
+          "path": "open-interpreter\\codex-rs\\apply-patch",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Memory": 6,
+            "RAG": 3,
+            "Tools": 3,
+            "Workflow": 2,
+            "API": 7,
+            "Security": 8
+          }
+        },
+        {
+          "project": "arg0",
+          "path": "open-interpreter\\codex-rs\\arg0",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Memory": 2,
+            "Tools": 2,
+            "API": 2,
+            "Security": 4
+          }
+        },
+        {
+          "project": "async-utils",
+          "path": "open-interpreter\\codex-rs\\async-utils",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {}
+        },
+        {
+          "project": "aws-auth",
+          "path": "open-interpreter\\codex-rs\\aws-auth",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Memory": 1,
+            "Voice": 2,
+            "Security": 8
+          }
+        },
+        {
+          "project": "backend-client",
+          "path": "open-interpreter\\codex-rs\\backend-client",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 2,
+            "RAG": 3,
+            "Voice": 4,
+            "API": 20,
+            "Security": 13
+          }
+        },
+        {
+          "project": "build-info",
+          "path": "open-interpreter\\codex-rs\\build-info",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 3
+          }
+        },
+        {
+          "project": "bwrap",
+          "path": "open-interpreter\\codex-rs\\bwrap",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "RAG": 2,
+            "Tools": 1
+          }
+        },
+        {
+          "project": "chat-wire-compat",
+          "path": "open-interpreter\\codex-rs\\chat-wire-compat",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 4,
+            "Agent": 3,
+            "Memory": 2,
+            "RAG": 1,
+            "Tools": 12,
+            "Voice": 2,
+            "API": 9,
+            "Security": 2
+          }
+        },
+        {
+          "project": "chatgpt",
+          "path": "open-interpreter\\codex-rs\\chatgpt",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 2,
+            "Memory": 2,
+            "RAG": 1,
+            "Tools": 3,
+            "API": 3,
+            "Security": 2
+          }
+        },
+        {
+          "project": "cli",
+          "path": "open-interpreter\\codex-rs\\cli",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 25,
+            "Agent": 26,
+            "Memory": 36,
+            "RAG": 17,
+            "Browser": 2,
+            "Computer Use": 15,
+            "Tools": 21,
+            "Workflow": 1,
+            "Database": 17,
+            "Voice": 2,
+            "API": 87,
+            "Security": 106
+          }
+        },
+        {
+          "project": "cloud-config",
+          "path": "open-interpreter\\codex-rs\\cloud-config",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 3,
+            "Memory": 1,
+            "RAG": 6,
+            "Workflow": 1,
+            "API": 3,
+            "Security": 8
+          }
+        },
+        {
+          "project": "cloud-tasks",
+          "path": "open-interpreter\\codex-rs\\cloud-tasks",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 3,
+            "Memory": 1,
+            "RAG": 3,
+            "Browser": 1,
+            "Computer Use": 1,
+            "Workflow": 1,
+            "API": 10,
+            "Security": 7
+          }
+        },
+        {
+          "project": "cloud-tasks-client",
+          "path": "open-interpreter\\codex-rs\\cloud-tasks-client",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Agent": 1,
+            "API": 3,
+            "Security": 1
+          }
+        },
+        {
+          "project": "cloud-tasks-mock-client",
+          "path": "open-interpreter\\codex-rs\\cloud-tasks-mock-client",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {}
+        },
+        {
+          "project": "code-mode",
+          "path": "open-interpreter\\codex-rs\\code-mode",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 6,
+            "RAG": 2,
+            "Tools": 22,
+            "Voice": 8,
+            "API": 3
+          }
+        },
+        {
+          "project": "code-mode-host",
+          "path": "open-interpreter\\codex-rs\\code-mode-host",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Memory": 12,
+            "RAG": 3,
+            "Tools": 30,
+            "Voice": 5,
+            "API": 14,
+            "Security": 2
+          }
+        },
+        {
+          "project": "code-mode-protocol",
+          "path": "open-interpreter\\codex-rs\\code-mode-protocol",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 1,
+            "RAG": 6,
+            "Tools": 16,
+            "Voice": 7,
+            "API": 4
+          }
+        },
+        {
+          "project": "code-mode-runtime",
+          "path": "open-interpreter\\codex-rs\\code-mode-runtime",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 7,
+            "Tools": 32,
+            "Voice": 10,
+            "API": 7,
+            "Security": 2
+          }
+        },
+        {
+          "project": "codex-api",
+          "path": "open-interpreter\\codex-rs\\codex-api",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 33,
+            "Agent": 17,
+            "Memory": 34,
+            "RAG": 1,
+            "Computer Use": 3,
+            "Tools": 43,
+            "Voice": 46,
+            "API": 80,
+            "Security": 33
+          }
+        },
+        {
+          "project": "codex-backend-openapi-models",
+          "path": "open-interpreter\\codex-rs\\codex-backend-openapi-models",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "RAG": 5,
+            "Voice": 2,
+            "API": 22
+          }
+        },
+        {
+          "project": "codex-client",
+          "path": "open-interpreter\\codex-rs\\codex-client",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Voice": 2,
+            "API": 3
+          }
+        },
+        {
+          "project": "codex-experimental-api-macros",
+          "path": "open-interpreter\\codex-rs\\codex-experimental-api-macros",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "API": 2
+          }
+        },
+        {
+          "project": "codex-home",
+          "path": "open-interpreter\\codex-rs\\codex-home",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Agent": 4,
+            "API": 3
+          }
+        },
+        {
+          "project": "codex-mcp",
+          "path": "open-interpreter\\codex-rs\\codex-mcp",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 17,
+            "Agent": 15,
+            "Memory": 25,
+            "RAG": 3,
+            "Browser": 1,
+            "Tools": 93,
+            "Workflow": 1,
+            "Voice": 1,
+            "API": 65,
+            "Security": 66
+          }
+        },
+        {
+          "project": "collaboration-mode-templates",
+          "path": "open-interpreter\\codex-rs\\collaboration-mode-templates",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Agent": 1,
+            "Memory": 1,
+            "RAG": 1,
+            "Tools": 3,
+            "API": 1,
+            "Security": 1
+          }
+        },
+        {
+          "project": "config",
+          "path": "open-interpreter\\codex-rs\\config",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 14,
+            "Agent": 19,
+            "Memory": 31,
+            "RAG": 12,
+            "Browser": 11,
+            "Computer Use": 13,
+            "Tools": 49,
+            "Workflow": 1,
+            "Database": 5,
+            "Voice": 5,
+            "API": 52,
+            "Security": 75
+          }
+        },
+        {
+          "project": "config-schema",
+          "path": "open-interpreter\\codex-rs\\config-schema",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {}
+        },
+        {
+          "project": "connectors",
+          "path": "open-interpreter\\codex-rs\\connectors",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 7,
+            "Computer Use": 2,
+            "Tools": 30,
+            "Voice": 1,
+            "API": 9,
+            "Security": 3
+          }
+        },
+        {
+          "project": "context-fragments",
+          "path": "open-interpreter\\codex-rs\\context-fragments",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 4,
+            "RAG": 4,
+            "API": 3
+          }
+        },
+        {
+          "project": "core",
+          "path": "open-interpreter\\codex-rs\\core",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 21,
+            "Agent": 52,
+            "Memory": 73,
+            "RAG": 32,
+            "Browser": 5,
+            "Computer Use": 12,
+            "Tools": 101,
+            "Workflow": 9,
+            "Database": 2,
+            "Voice": 22,
+            "API": 82,
+            "Security": 107
+          }
+        },
+        {
+          "project": "common",
+          "path": "open-interpreter\\codex-rs\\core\\tests\\common",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 5,
+            "Agent": 4,
+            "Memory": 5,
+            "RAG": 3,
+            "Tools": 16,
+            "Database": 2,
+            "Voice": 6,
+            "API": 21,
+            "Security": 10
+          }
+        },
+        {
+          "project": "core-api",
+          "path": "open-interpreter\\codex-rs\\core-api",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 2,
+            "Memory": 2,
+            "Tools": 3,
+            "Database": 1,
+            "Voice": 1,
+            "API": 4,
+            "Security": 2
+          }
+        },
+        {
+          "project": "core-plugins",
+          "path": "open-interpreter\\codex-rs\\core-plugins",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 41,
+            "Agent": 58,
+            "Memory": 18,
+            "RAG": 5,
+            "Browser": 2,
+            "Computer Use": 11,
+            "Tools": 70,
+            "Workflow": 1,
+            "Database": 7,
+            "Voice": 1,
+            "API": 99,
+            "Security": 59
+          }
+        },
+        {
+          "project": "diagnostics",
+          "path": "open-interpreter\\codex-rs\\diagnostics",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 2
+          }
+        },
+        {
+          "project": "exec",
+          "path": "open-interpreter\\codex-rs\\exec",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 7,
+            "Agent": 21,
+            "Memory": 13,
+            "RAG": 1,
+            "Computer Use": 2,
+            "Tools": 21,
+            "Workflow": 2,
+            "Database": 2,
+            "API": 38,
+            "Security": 34
+          }
+        },
+        {
+          "project": "exec-server",
+          "path": "open-interpreter\\codex-rs\\exec-server",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 6,
+            "Agent": 6,
+            "Memory": 38,
+            "RAG": 15,
+            "Computer Use": 3,
+            "Tools": 6,
+            "Database": 4,
+            "API": 115,
+            "Security": 105
+          }
+        },
+        {
+          "project": "support",
+          "path": "open-interpreter\\codex-rs\\exec-server\\tests\\support",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 1,
+            "API": 3
+          }
+        },
+        {
+          "project": "exec-server-protocol",
+          "path": "open-interpreter\\codex-rs\\exec-server-protocol",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 2,
+            "Tools": 1,
+            "API": 6,
+            "Security": 5
+          }
+        },
+        {
+          "project": "execpolicy",
+          "path": "open-interpreter\\codex-rs\\execpolicy",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 5,
+            "RAG": 1,
+            "API": 8,
+            "Security": 3
+          }
+        },
+        {
+          "project": "execpolicy-legacy",
+          "path": "open-interpreter\\codex-rs\\execpolicy-legacy",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Agent": 3,
+            "Memory": 1,
+            "API": 3,
+            "Security": 2
+          }
+        },
+        {
+          "project": "agent",
+          "path": "open-interpreter\\codex-rs\\ext\\agent",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Agent": 4,
+            "Memory": 1,
+            "API": 1
+          }
+        },
+        {
+          "project": "connectors",
+          "path": "open-interpreter\\codex-rs\\ext\\connectors",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Security": 1
+          }
+        },
+        {
+          "project": "extension-api",
+          "path": "open-interpreter\\codex-rs\\ext\\extension-api",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Agent": 14,
+            "Memory": 17,
+            "RAG": 10,
+            "Computer Use": 2,
+            "Tools": 21,
+            "API": 18,
+            "Security": 7
+          }
+        },
+        {
+          "project": "git-attribution",
+          "path": "open-interpreter\\codex-rs\\ext\\git-attribution",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 1,
+            "Memory": 2,
+            "RAG": 1,
+            "Tools": 1,
+            "API": 6,
+            "Security": 4
+          }
+        },
+        {
+          "project": "goal",
+          "path": "open-interpreter\\codex-rs\\ext\\goal",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Agent": 5,
+            "Memory": 6,
+            "RAG": 2,
+            "Tools": 19,
+            "Database": 1,
+            "API": 13,
+            "Security": 1
+          }
+        },
+        {
+          "project": "guardian-v2",
+          "path": "open-interpreter\\codex-rs\\ext\\guardian-v2",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 11,
+            "Agent": 18,
+            "Memory": 26,
+            "RAG": 10,
+            "Browser": 2,
+            "Computer Use": 10,
+            "Tools": 45,
+            "Workflow": 4,
+            "Voice": 1,
+            "API": 40,
+            "Security": 63
+          }
+        },
+        {
+          "project": "history-notes",
+          "path": "open-interpreter\\codex-rs\\ext\\history-notes",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 5,
+            "Agent": 7,
+            "Memory": 5,
+            "RAG": 3,
+            "Tools": 17,
+            "Voice": 1,
+            "API": 13,
+            "Security": 8
+          }
+        },
+        {
+          "project": "image-generation",
+          "path": "open-interpreter\\codex-rs\\ext\\image-generation",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 1,
+            "Memory": 1,
+            "Tools": 11,
+            "Voice": 2,
+            "API": 7,
+            "Security": 5
+          }
+        },
+        {
+          "project": "items",
+          "path": "open-interpreter\\codex-rs\\ext\\items",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Tools": 1,
+            "API": 4,
+            "Security": 1
+          }
+        },
+        {
+          "project": "mcp",
+          "path": "open-interpreter\\codex-rs\\ext\\mcp",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 7,
+            "Computer Use": 1,
+            "Tools": 20,
+            "API": 20,
+            "Security": 8
+          }
+        },
+        {
+          "project": "memories",
+          "path": "open-interpreter\\codex-rs\\ext\\memories",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 44,
+            "RAG": 3,
+            "Tools": 31,
+            "Voice": 2,
+            "API": 9,
+            "Security": 1
+          }
+        },
+        {
+          "project": "queue",
+          "path": "open-interpreter\\codex-rs\\ext\\queue",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Agent": 2,
+            "Memory": 2,
+            "RAG": 3,
+            "Tools": 2,
+            "Database": 2,
+            "Voice": 2,
+            "API": 5,
+            "Security": 1
+          }
+        },
+        {
+          "project": "skills",
+          "path": "open-interpreter\\codex-rs\\ext\\skills",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 32,
+            "Agent": 24,
+            "Memory": 24,
+            "RAG": 13,
+            "Tools": 51,
+            "Workflow": 1,
+            "Database": 2,
+            "Voice": 3,
+            "API": 64,
+            "Security": 43
+          }
+        },
+        {
+          "project": "web-search",
+          "path": "open-interpreter\\codex-rs\\ext\\web-search",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 1,
+            "Memory": 3,
+            "RAG": 1,
+            "Computer Use": 1,
+            "Tools": 13,
+            "Voice": 1,
+            "API": 8,
+            "Security": 5
+          }
+        },
+        {
+          "project": "external-agent-migration",
+          "path": "open-interpreter\\codex-rs\\external-agent-migration",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 7,
+            "Agent": 92,
+            "Memory": 35,
+            "RAG": 3,
+            "Computer Use": 1,
+            "Tools": 45,
+            "Workflow": 1,
+            "Database": 4,
+            "Voice": 2,
+            "API": 24,
+            "Security": 26
+          }
+        },
+        {
+          "project": "external-agent-sessions",
+          "path": "open-interpreter\\codex-rs\\external-agent-sessions",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Agent": 14,
+            "Memory": 3,
+            "Tools": 1,
+            "API": 2,
+            "Security": 2
+          }
+        },
+        {
+          "project": "features",
+          "path": "open-interpreter\\codex-rs\\features",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 4,
+            "Agent": 6,
+            "Memory": 5,
+            "RAG": 1,
+            "Browser": 2,
+            "Computer Use": 6,
+            "Tools": 10,
+            "Workflow": 1,
+            "Database": 2,
+            "Voice": 2,
+            "API": 8,
+            "Security": 11
+          }
+        },
+        {
+          "project": "feedback",
+          "path": "open-interpreter\\codex-rs\\feedback",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 2,
+            "Memory": 6,
+            "RAG": 1,
+            "Computer Use": 1,
+            "Tools": 3,
+            "Voice": 1,
+            "API": 6,
+            "Security": 7
+          }
+        },
+        {
+          "project": "file-search",
+          "path": "open-interpreter\\codex-rs\\file-search",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 1,
+            "RAG": 2,
+            "Tools": 1,
+            "API": 1
+          }
+        },
+        {
+          "project": "file-system",
+          "path": "open-interpreter\\codex-rs\\file-system",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 2,
+            "Computer Use": 1,
+            "Workflow": 1,
+            "API": 2,
+            "Security": 3
+          }
+        },
+        {
+          "project": "file-watcher",
+          "path": "open-interpreter\\codex-rs\\file-watcher",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "API": 2
+          }
+        },
+        {
+          "project": "git-utils",
+          "path": "open-interpreter\\codex-rs\\git-utils",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Memory": 2,
+            "RAG": 1,
+            "Tools": 5,
+            "Workflow": 2,
+            "API": 6,
+            "Security": 5
+          }
+        },
+        {
+          "project": "guardian-context",
+          "path": "open-interpreter\\codex-rs\\guardian-context",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Agent": 2,
+            "Memory": 7,
+            "RAG": 7,
+            "Tools": 11,
+            "Voice": 1,
+            "API": 1,
+            "Security": 10
+          }
+        },
+        {
+          "project": "history",
+          "path": "open-interpreter\\codex-rs\\history",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Agent": 3,
+            "Memory": 3,
+            "RAG": 2,
+            "Tools": 5,
+            "API": 5,
+            "Security": 6
+          }
+        },
+        {
+          "project": "hooks",
+          "path": "open-interpreter\\codex-rs\\hooks",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 44,
+            "Memory": 32,
+            "RAG": 7,
+            "Browser": 1,
+            "Computer Use": 1,
+            "Tools": 46,
+            "Voice": 12,
+            "API": 13,
+            "Security": 34
+          }
+        },
+        {
+          "project": "http-client",
+          "path": "open-interpreter\\codex-rs\\http-client",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 2,
+            "Memory": 4,
+            "RAG": 8,
+            "Tools": 5,
+            "Voice": 4,
+            "API": 24,
+            "Security": 40
+          }
+        },
+        {
+          "project": "install-context",
+          "path": "open-interpreter\\codex-rs\\install-context",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Memory": 3,
+            "API": 1
+          }
+        },
+        {
+          "project": "keyring-store",
+          "path": "open-interpreter\\codex-rs\\keyring-store",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "API": 1,
+            "Security": 1
+          }
+        },
+        {
+          "project": "linux-sandbox",
+          "path": "open-interpreter\\codex-rs\\linux-sandbox",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 6,
+            "Memory": 7,
+            "RAG": 1,
+            "Computer Use": 1,
+            "Tools": 5,
+            "Workflow": 2,
+            "API": 13,
+            "Security": 34
+          }
+        },
+        {
+          "project": "lmstudio",
+          "path": "open-interpreter\\codex-rs\\lmstudio",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "API": 2,
+            "Security": 1
+          }
+        },
+        {
+          "project": "login",
+          "path": "open-interpreter\\codex-rs\\login",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 25,
+            "Agent": 20,
+            "Memory": 14,
+            "RAG": 12,
+            "Browser": 6,
+            "Computer Use": 2,
+            "Tools": 1,
+            "API": 68,
+            "Security": 65
+          }
+        },
+        {
+          "project": "mcp-server",
+          "path": "open-interpreter\\codex-rs\\mcp-server",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 6,
+            "Memory": 8,
+            "Tools": 35,
+            "Database": 1,
+            "Voice": 2,
+            "API": 20,
+            "Security": 12
+          }
+        },
+        {
+          "project": "common",
+          "path": "open-interpreter\\codex-rs\\mcp-server\\tests\\common",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Agent": 1,
+            "Memory": 1,
+            "Tools": 7,
+            "API": 5,
+            "Security": 2
+          }
+        },
+        {
+          "project": "read",
+          "path": "open-interpreter\\codex-rs\\memories\\read",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 8,
+            "Workflow": 1,
+            "API": 1
+          }
+        },
+        {
+          "project": "write",
+          "path": "open-interpreter\\codex-rs\\memories\\write",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 6,
+            "Agent": 15,
+            "Memory": 55,
+            "RAG": 10,
+            "Tools": 8,
+            "Workflow": 6,
+            "Database": 2,
+            "API": 11,
+            "Security": 25
+          }
+        },
+        {
+          "project": "message-history",
+          "path": "open-interpreter\\codex-rs\\message-history",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Tools": 1,
+            "API": 2,
+            "Security": 1
+          }
+        },
+        {
+          "project": "model-provider",
+          "path": "open-interpreter\\codex-rs\\model-provider",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 15,
+            "Agent": 8,
+            "Memory": 7,
+            "Tools": 7,
+            "Voice": 2,
+            "API": 23,
+            "Security": 28
+          }
+        },
+        {
+          "project": "model-provider-info",
+          "path": "open-interpreter\\codex-rs\\model-provider-info",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 21,
+            "Agent": 4,
+            "Memory": 3,
+            "RAG": 1,
+            "Computer Use": 1,
+            "Tools": 4,
+            "Voice": 2,
+            "API": 10,
+            "Security": 7
+          }
+        },
+        {
+          "project": "models-manager",
+          "path": "open-interpreter\\codex-rs\\models-manager",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 16,
+            "Agent": 9,
+            "Memory": 11,
+            "RAG": 8,
+            "Browser": 3,
+            "Computer Use": 5,
+            "Tools": 16,
+            "Workflow": 4,
+            "Voice": 2,
+            "API": 17,
+            "Security": 15
+          }
+        },
+        {
+          "project": "network-proxy",
+          "path": "open-interpreter\\codex-rs\\network-proxy",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 13,
+            "Memory": 21,
+            "RAG": 9,
+            "Computer Use": 1,
+            "Tools": 3,
+            "API": 45,
+            "Security": 64
+          }
+        },
+        {
+          "project": "ollama",
+          "path": "open-interpreter\\codex-rs\\ollama",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 8,
+            "API": 7,
+            "Security": 2
+          }
+        },
+        {
+          "project": "otel",
+          "path": "open-interpreter\\codex-rs\\otel",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 6,
+            "Memory": 19,
+            "Computer Use": 1,
+            "Tools": 21,
+            "Workflow": 1,
+            "API": 34,
+            "Security": 16
+          }
+        },
+        {
+          "project": "otel-trace-websocket",
+          "path": "open-interpreter\\codex-rs\\otel-trace-websocket",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 1,
+            "API": 2
+          }
+        },
+        {
+          "project": "plugin",
+          "path": "open-interpreter\\codex-rs\\plugin",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 3,
+            "Browser": 1,
+            "Computer Use": 3,
+            "Tools": 8,
+            "API": 5,
+            "Security": 3
+          }
+        },
+        {
+          "project": "process-hardening",
+          "path": "open-interpreter\\codex-rs\\process-hardening",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {}
+        },
+        {
+          "project": "product-info",
+          "path": "open-interpreter\\codex-rs\\product-info",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Memory": 1,
+            "Tools": 1,
+            "API": 1,
+            "Security": 1
+          }
+        },
+        {
+          "project": "prompts",
+          "path": "open-interpreter\\codex-rs\\prompts",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 4,
+            "Memory": 7,
+            "RAG": 4,
+            "Browser": 1,
+            "Tools": 10,
+            "Workflow": 2,
+            "API": 5,
+            "Security": 18
+          }
+        },
+        {
+          "project": "protocol",
+          "path": "open-interpreter\\codex-rs\\protocol",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 13,
+            "Agent": 23,
+            "Memory": 26,
+            "RAG": 11,
+            "Browser": 1,
+            "Computer Use": 2,
+            "Tools": 51,
+            "Workflow": 1,
+            "Database": 1,
+            "Voice": 15,
+            "API": 54,
+            "Security": 66
+          }
+        },
+        {
+          "project": "realtime-webrtc",
+          "path": "open-interpreter\\codex-rs\\realtime-webrtc",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Memory": 2,
+            "Voice": 5,
+            "API": 2,
+            "Security": 1
+          }
+        },
+        {
+          "project": "response-debug-context",
+          "path": "open-interpreter\\codex-rs\\response-debug-context",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Memory": 2,
+            "API": 3,
+            "Security": 3
+          }
+        },
+        {
+          "project": "responses-api-proxy",
+          "path": "open-interpreter\\codex-rs\\responses-api-proxy",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 6,
+            "Agent": 1,
+            "Memory": 4,
+            "RAG": 1,
+            "API": 13,
+            "Security": 11
+          }
+        },
+        {
+          "project": "npm",
+          "path": "open-interpreter\\codex-rs\\responses-api-proxy\\npm",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "API": 3
+          }
+        },
+        {
+          "project": "rmcp-client",
+          "path": "open-interpreter\\codex-rs\\rmcp-client",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 6,
+            "Agent": 13,
+            "Memory": 38,
+            "RAG": 19,
+            "Browser": 2,
+            "Computer Use": 1,
+            "Tools": 125,
+            "Workflow": 1,
+            "Voice": 5,
+            "API": 125,
+            "Security": 134
+          }
+        },
+        {
+          "project": "rollout",
+          "path": "open-interpreter\\codex-rs\\rollout",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 17,
+            "Memory": 33,
+            "RAG": 8,
+            "Tools": 22,
+            "Database": 11,
+            "Voice": 2,
+            "API": 8,
+            "Security": 16
+          }
+        },
+        {
+          "project": "rollout-trace",
+          "path": "open-interpreter\\codex-rs\\rollout-trace",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 38,
+            "Memory": 26,
+            "RAG": 3,
+            "Browser": 1,
+            "Tools": 59,
+            "Voice": 1,
+            "API": 15,
+            "Security": 19
+          }
+        },
+        {
+          "project": "sandboxing",
+          "path": "open-interpreter\\codex-rs\\sandboxing",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 3,
+            "Memory": 7,
+            "RAG": 1,
+            "Browser": 1,
+            "Computer Use": 3,
+            "Tools": 6,
+            "Workflow": 3,
+            "Voice": 1,
+            "API": 18,
+            "Security": 41
+          }
+        },
+        {
+          "project": "secrets",
+          "path": "open-interpreter\\codex-rs\\secrets",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Memory": 1,
+            "Tools": 1,
+            "API": 2,
+            "Security": 8
+          }
+        },
+        {
+          "project": "shell-command",
+          "path": "open-interpreter\\codex-rs\\shell-command",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Memory": 2,
+            "RAG": 3,
+            "Browser": 1,
+            "Workflow": 4,
+            "API": 9,
+            "Security": 3
+          }
+        },
+        {
+          "project": "shell-escalation",
+          "path": "open-interpreter\\codex-rs\\shell-escalation",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 2,
+            "Tools": 1,
+            "Workflow": 2,
+            "API": 11,
+            "Security": 7
+          }
+        },
+        {
+          "project": "skills",
+          "path": "open-interpreter\\codex-rs\\skills",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 43,
+            "Agent": 43,
+            "Memory": 17,
+            "RAG": 19,
+            "Browser": 2,
+            "Computer Use": 7,
+            "Tools": 56,
+            "Workflow": 27,
+            "Database": 7,
+            "Voice": 3,
+            "API": 53,
+            "Security": 50
+          }
+        },
+        {
+          "project": "state",
+          "path": "open-interpreter\\codex-rs\\state",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 9,
+            "Agent": 12,
+            "Memory": 19,
+            "RAG": 7,
+            "Computer Use": 2,
+            "Tools": 7,
+            "Workflow": 2,
+            "Database": 49,
+            "Voice": 3,
+            "API": 13,
+            "Security": 13
+          }
+        },
+        {
+          "project": "stdio-to-uds",
+          "path": "open-interpreter\\codex-rs\\stdio-to-uds",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 2,
+            "RAG": 1,
+            "Tools": 1,
+            "API": 4,
+            "Security": 2
+          }
+        },
+        {
+          "project": "terminal-detection",
+          "path": "open-interpreter\\codex-rs\\terminal-detection",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Agent": 2,
+            "Voice": 2
+          }
+        },
+        {
+          "project": "test-binary-support",
+          "path": "open-interpreter\\codex-rs\\test-binary-support",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {}
+        },
+        {
+          "project": "thread-manager-sample",
+          "path": "open-interpreter\\codex-rs\\thread-manager-sample",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 2,
+            "Memory": 2,
+            "Tools": 3,
+            "Database": 1,
+            "Voice": 1,
+            "API": 4,
+            "Security": 3
+          }
+        },
+        {
+          "project": "thread-store",
+          "path": "open-interpreter\\codex-rs\\thread-store",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 4,
+            "Agent": 36,
+            "Memory": 57,
+            "RAG": 15,
+            "Tools": 35,
+            "Database": 46,
+            "Voice": 24,
+            "API": 28,
+            "Security": 28
+          }
+        },
+        {
+          "project": "tools",
+          "path": "open-interpreter\\codex-rs\\tools",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 12,
+            "Agent": 12,
+            "Memory": 9,
+            "RAG": 6,
+            "Browser": 1,
+            "Computer Use": 2,
+            "Tools": 89,
+            "Workflow": 3,
+            "Database": 2,
+            "Voice": 2,
+            "API": 26,
+            "Security": 7
+          }
+        },
+        {
+          "project": "tui",
+          "path": "open-interpreter\\codex-rs\\tui",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 5,
+            "Memory": 2,
+            "RAG": 2,
+            "Browser": 1,
+            "Computer Use": 1,
+            "Tools": 8,
+            "API": 2,
+            "Security": 4
+          }
+        },
+        {
+          "project": "uds",
+          "path": "open-interpreter\\codex-rs\\uds",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 1,
+            "API": 2,
+            "Security": 2
+          }
+        },
+        {
+          "project": "absolute-path",
+          "path": "open-interpreter\\codex-rs\\utils\\absolute-path",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "RAG": 1,
+            "API": 2
+          }
+        },
+        {
+          "project": "approval-presets",
+          "path": "open-interpreter\\codex-rs\\utils\\approval-presets",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Agent": 1,
+            "Tools": 1,
+            "API": 1,
+            "Security": 1
+          }
+        },
+        {
+          "project": "audio",
+          "path": "open-interpreter\\codex-rs\\utils\\audio",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Agent": 1,
+            "Memory": 1,
+            "Tools": 3,
+            "Voice": 3
+          }
+        },
+        {
+          "project": "cache",
+          "path": "open-interpreter\\codex-rs\\utils\\cache",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {}
+        },
+        {
+          "project": "cargo-bin",
+          "path": "open-interpreter\\codex-rs\\utils\\cargo-bin",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {}
+        },
+        {
+          "project": "cli",
+          "path": "open-interpreter\\codex-rs\\utils\\cli",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 1,
+            "Tools": 2,
+            "API": 1,
+            "Security": 5
+          }
+        },
+        {
+          "project": "elapsed",
+          "path": "open-interpreter\\codex-rs\\utils\\elapsed",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {}
+        },
+        {
+          "project": "fuzzy-match",
+          "path": "open-interpreter\\codex-rs\\utils\\fuzzy-match",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {}
+        },
+        {
+          "project": "git-discovery",
+          "path": "open-interpreter\\codex-rs\\utils\\git-discovery",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {}
+        },
+        {
+          "project": "home-dir",
+          "path": "open-interpreter\\codex-rs\\utils\\home-dir",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {}
+        },
+        {
+          "project": "image",
+          "path": "open-interpreter\\codex-rs\\utils\\image",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 1,
+            "Computer Use": 1,
+            "Tools": 3,
+            "API": 2
+          }
+        },
+        {
+          "project": "json-to-toml",
+          "path": "open-interpreter\\codex-rs\\utils\\json-to-toml",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {}
+        },
+        {
+          "project": "oss",
+          "path": "open-interpreter\\codex-rs\\utils\\oss",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 2
+          }
+        },
+        {
+          "project": "output-truncation",
+          "path": "open-interpreter\\codex-rs\\utils\\output-truncation",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Tools": 1,
+            "Voice": 2,
+            "API": 1
+          }
+        },
+        {
+          "project": "path-uri",
+          "path": "open-interpreter\\codex-rs\\utils\\path-uri",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 2,
+            "Memory": 2,
+            "RAG": 2,
+            "Tools": 4,
+            "Database": 2,
+            "API": 9,
+            "Security": 5
+          }
+        },
+        {
+          "project": "path-utils",
+          "path": "open-interpreter\\codex-rs\\utils\\path-utils",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {}
+        },
+        {
+          "project": "plugins",
+          "path": "open-interpreter\\codex-rs\\utils\\plugins",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Agent": 2,
+            "Tools": 3,
+            "API": 3,
+            "Security": 1
+          }
+        },
+        {
+          "project": "pty",
+          "path": "open-interpreter\\codex-rs\\utils\\pty",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 2,
+            "Voice": 5,
+            "API": 17,
+            "Security": 9
+          }
+        },
+        {
+          "project": "readiness",
+          "path": "open-interpreter\\codex-rs\\utils\\readiness",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Security": 2
+          }
+        },
+        {
+          "project": "redacted-string",
+          "path": "open-interpreter\\codex-rs\\utils\\redacted-string",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {}
+        },
+        {
+          "project": "rustls-provider",
+          "path": "open-interpreter\\codex-rs\\utils\\rustls-provider",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {}
+        },
+        {
+          "project": "sandbox-summary",
+          "path": "open-interpreter\\codex-rs\\utils\\sandbox-summary",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 1,
+            "API": 1,
+            "Security": 5
+          }
+        },
+        {
+          "project": "sleep-inhibitor",
+          "path": "open-interpreter\\codex-rs\\utils\\sleep-inhibitor",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 1,
+            "API": 1
+          }
+        },
+        {
+          "project": "stream-parser",
+          "path": "open-interpreter\\codex-rs\\utils\\stream-parser",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Security": 1
+          }
+        },
+        {
+          "project": "string",
+          "path": "open-interpreter\\codex-rs\\utils\\string",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Agent": 1,
+            "RAG": 2,
+            "API": 1
+          }
+        },
+        {
+          "project": "template",
+          "path": "open-interpreter\\codex-rs\\utils\\template",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "API": 1
+          }
+        },
+        {
+          "project": "v8-poc",
+          "path": "open-interpreter\\codex-rs\\v8-poc",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 1,
+            "Security": 2
+          }
+        },
+        {
+          "project": "voice-host",
+          "path": "open-interpreter\\codex-rs\\voice-host",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 2,
+            "RAG": 1,
+            "Voice": 5,
+            "Security": 2
+          }
+        },
+        {
+          "project": "websocket-client",
+          "path": "open-interpreter\\codex-rs\\websocket-client",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 1,
+            "RAG": 1,
+            "API": 5,
+            "Security": 2
+          }
+        },
+        {
+          "project": "windows-sandbox-rs",
+          "path": "open-interpreter\\codex-rs\\windows-sandbox-rs",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 10,
+            "Memory": 27,
+            "RAG": 15,
+            "Computer Use": 19,
+            "Tools": 9,
+            "Workflow": 2,
+            "Voice": 3,
+            "API": 48,
+            "Security": 136
+          }
+        },
+        {
+          "project": "workload-identity",
+          "path": "open-interpreter\\codex-rs\\workload-identity",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 4,
+            "RAG": 1,
+            "Tools": 3,
+            "API": 2,
+            "Security": 3
+          }
+        },
+        {
+          "project": "worktree",
+          "path": "open-interpreter\\codex-rs\\worktree",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "Memory": 4,
+            "Computer Use": 5
+          }
+        },
+        {
+          "project": "scripts",
+          "path": "open-interpreter\\scripts",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 15,
+            "Agent": 1,
+            "Memory": 14,
+            "RAG": 8,
+            "Computer Use": 3,
+            "Tools": 50,
+            "Workflow": 6,
+            "Voice": 1,
+            "API": 37,
+            "Security": 37
+          }
+        },
+        {
+          "project": "smoke_tests",
+          "path": "open-interpreter\\scripts\\codex_package\\smoke_tests",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Memory": 1,
+            "Tools": 3,
+            "API": 5,
+            "Security": 2
+          }
+        },
+        {
+          "project": "python",
+          "path": "open-interpreter\\sdk\\python",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 63,
+            "Agent": 32,
+            "Memory": 12,
+            "RAG": 13,
+            "Browser": 10,
+            "Computer Use": 4,
+            "Tools": 20,
+            "Workflow": 6,
+            "Database": 3,
+            "Voice": 4,
+            "API": 68,
+            "Security": 43
+          }
+        },
+        {
+          "project": "python-runtime",
+          "path": "open-interpreter\\sdk\\python-runtime",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 4,
+            "Tools": 1,
+            "Security": 1
+          }
+        },
+        {
+          "project": "typescript",
+          "path": "open-interpreter\\sdk\\typescript",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 8,
+            "Agent": 10,
+            "Memory": 4,
+            "RAG": 1,
+            "Computer Use": 1,
+            "Tools": 8,
+            "Workflow": 3,
+            "Voice": 1,
+            "API": 14,
+            "Security": 12
+          }
+        },
+        {
+          "project": "argument-comment-lint",
+          "path": "open-interpreter\\tools\\argument-comment-lint",
+          "type": [
+            "Rust"
+          ],
+          "capabilities": {
+            "LLM": 6,
+            "Memory": 1,
+            "Tools": 10,
+            "API": 5
+          }
+        },
+        {
+          "project": "open-webui",
+          "path": "open-webui",
+          "type": [
+            "Python",
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 59,
+            "Agent": 15,
+            "Memory": 35,
+            "RAG": 42,
+            "Browser": 15,
+            "Computer Use": 9,
+            "Tools": 37,
+            "Workflow": 28,
+            "Database": 44,
+            "Voice": 33,
+            "API": 68,
+            "Security": 69
+          }
+        },
+        {
+          "project": "backend",
+          "path": "open-webui\\backend",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 26,
+            "Agent": 7,
+            "Memory": 33,
+            "RAG": 34,
+            "Browser": 5,
+            "Computer Use": 1,
+            "Tools": 30,
+            "Workflow": 11,
+            "Database": 54,
+            "Voice": 21,
+            "API": 49,
+            "Security": 49
+          }
+        },
+        {
+          "project": "telemetry",
+          "path": "open-webui\\backend\\open_webui\\utils\\telemetry",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "Agent": 1,
+            "Database": 3,
+            "API": 7,
+            "Security": 6
+          }
+        },
+        {
+          "project": "OpenHands",
+          "path": "OpenHands",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 41,
+            "Agent": 80,
+            "Memory": 24,
+            "RAG": 24,
+            "Browser": 42,
+            "Computer Use": 32,
+            "Tools": 46,
+            "Workflow": 59,
+            "Database": 3,
+            "Voice": 3,
+            "API": 106,
+            "Security": 92
+          }
+        },
+        {
+          "project": "electron",
+          "path": "OpenHands\\electron",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "Agent": 4,
+            "Memory": 2,
+            "RAG": 1,
+            "Browser": 1,
+            "Computer Use": 2,
+            "Tools": 2,
+            "Workflow": 1,
+            "API": 4,
+            "Security": 2
+          }
+        },
+        {
+          "project": "PersonalJarvis",
+          "path": "PersonalJarvis",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 58,
+            "Agent": 48,
+            "Memory": 28,
+            "RAG": 42,
+            "Browser": 5,
+            "Computer Use": 47,
+            "Tools": 72,
+            "Workflow": 53,
+            "Database": 10,
+            "Voice": 73,
+            "API": 114,
+            "Security": 99
+          }
+        },
+        {
+          "project": "board-backend",
+          "path": "PersonalJarvis\\board-backend",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "Memory": 3,
+            "RAG": 3,
+            "Computer Use": 1,
+            "Tools": 10,
+            "Database": 4,
+            "Voice": 4,
+            "API": 43,
+            "Security": 23
+          }
+        },
+        {
+          "project": "frontend",
+          "path": "PersonalJarvis\\jarvis\\ui\\web\\frontend",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 39,
+            "Agent": 36,
+            "Memory": 8,
+            "RAG": 13,
+            "Browser": 16,
+            "Computer Use": 30,
+            "Tools": 15,
+            "Workflow": 7,
+            "Database": 3,
+            "Voice": 40,
+            "API": 93,
+            "Security": 28
+          }
+        },
+        {
+          "project": "keyproxy",
+          "path": "PersonalJarvis\\keyproxy",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 29,
+            "Memory": 8,
+            "RAG": 7,
+            "Computer Use": 1,
+            "Database": 6,
+            "API": 24,
+            "Security": 28
+          }
+        },
+        {
+          "project": "skillbook",
+          "path": "PersonalJarvis\\skillbook",
+          "type": [
+            "Python"
+          ],
+          "capabilities": {
+            "LLM": 53,
+            "Agent": 32,
+            "Memory": 48,
+            "RAG": 28,
+            "Computer Use": 1,
+            "Tools": 7,
+            "Workflow": 3,
+            "Database": 23,
+            "Voice": 6,
+            "API": 24,
+            "Security": 19
+          }
+        },
+        {
+          "project": "video",
+          "path": "PersonalJarvis\\video",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 18,
+            "Agent": 32,
+            "Memory": 15,
+            "RAG": 6,
+            "Browser": 10,
+            "Computer Use": 33,
+            "Tools": 14,
+            "Workflow": 6,
+            "Database": 6,
+            "Voice": 62,
+            "API": 20,
+            "Security": 3
+          }
+        },
+        {
+          "project": "wiki-video",
+          "path": "PersonalJarvis\\wiki-video",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 4,
+            "Memory": 6,
+            "RAG": 4,
+            "Browser": 1,
+            "Tools": 4,
+            "Workflow": 3,
+            "Database": 2,
+            "Voice": 3,
+            "API": 4
+          }
+        },
+        {
+          "project": "ScuffedPACE-Jarvis-os",
+          "path": "ScuffedPACE-Jarvis-os",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 31,
+            "Agent": 5,
+            "Memory": 53,
+            "RAG": 13,
+            "Browser": 28,
+            "Computer Use": 8,
+            "Tools": 20,
+            "Workflow": 6,
+            "Database": 40,
+            "Voice": 50,
+            "API": 92,
+            "Security": 67
+          }
+        }
+      ]
+    },
+    {
+      "repository": "VoltAgent",
+      "projects": [
+        {
+          "project": "VoltAgent",
+          "path": ".",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 62,
+            "Agent": 68,
+            "Memory": 20,
+            "RAG": 36,
+            "Browser": 13,
+            "Computer Use": 5,
+            "Tools": 69,
+            "Workflow": 26,
+            "Database": 18,
+            "Voice": 14,
+            "API": 57,
+            "Security": 28
+          }
+        },
+        {
+          "project": "anthropic-ai",
+          "path": "archive\\deprecated-providers\\anthropic-ai",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 12,
+            "Agent": 7,
+            "Memory": 1,
+            "RAG": 2,
+            "Tools": 12,
+            "Workflow": 2,
+            "API": 7
+          }
+        },
+        {
+          "project": "google-ai",
+          "path": "archive\\deprecated-providers\\google-ai",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 12,
+            "Agent": 8,
+            "Memory": 2,
+            "RAG": 2,
+            "Tools": 12,
+            "Workflow": 3,
+            "API": 10,
+            "Security": 2
+          }
+        },
+        {
+          "project": "groq-ai",
+          "path": "archive\\deprecated-providers\\groq-ai",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 6,
+            "Agent": 8,
+            "Memory": 2,
+            "RAG": 3,
+            "Tools": 11,
+            "Workflow": 2,
+            "API": 8
+          }
+        },
+        {
+          "project": "vercel-ai",
+          "path": "archive\\deprecated-providers\\vercel-ai",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 11,
+            "Agent": 12,
+            "Memory": 3,
+            "RAG": 5,
+            "Browser": 1,
+            "Tools": 14,
+            "Workflow": 3,
+            "Database": 2,
+            "Voice": 3,
+            "API": 9
+          }
+        },
+        {
+          "project": "vercel-ui",
+          "path": "archive\\deprecated-providers\\vercel-ui",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 6,
+            "Memory": 2,
+            "RAG": 4,
+            "Tools": 2,
+            "API": 3
+          }
+        },
+        {
+          "project": "xsai",
+          "path": "archive\\deprecated-providers\\xsai",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 8,
+            "Agent": 9,
+            "Memory": 3,
+            "RAG": 5,
+            "Browser": 1,
+            "Tools": 11,
+            "Workflow": 3,
+            "Database": 1,
+            "Voice": 3,
+            "API": 8,
+            "Security": 2
+          }
+        },
+        {
+          "project": "base",
+          "path": "examples\\base",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 5,
+            "Memory": 2,
+            "RAG": 3,
+            "Tools": 2,
+            "API": 3,
+            "Security": 1
+          }
+        },
+        {
+          "project": "github-repo-analyzer",
+          "path": "examples\\github-repo-analyzer",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 6,
+            "Memory": 2,
+            "RAG": 3,
+            "Tools": 5,
+            "API": 6,
+            "Security": 1
+          }
+        },
+        {
+          "project": "github-star-stories",
+          "path": "examples\\github-star-stories",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 6,
+            "RAG": 1,
+            "Tools": 5,
+            "Workflow": 1,
+            "Database": 2,
+            "API": 7,
+            "Security": 4
+          }
+        },
+        {
+          "project": "next-js-chatbot-starter-template",
+          "path": "examples\\next-js-chatbot-starter-template",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 8,
+            "Agent": 21,
+            "Memory": 20,
+            "RAG": 4,
+            "Computer Use": 3,
+            "Tools": 21,
+            "Voice": 2,
+            "API": 19,
+            "Security": 10
+          }
+        },
+        {
+          "project": "with-a2a-server",
+          "path": "examples\\with-a2a-server",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 8,
+            "Memory": 1,
+            "RAG": 1,
+            "Tools": 4,
+            "API": 6
+          }
+        },
+        {
+          "project": "with-ad-creator",
+          "path": "examples\\with-ad-creator",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 10,
+            "Agent": 17,
+            "Memory": 8,
+            "RAG": 4,
+            "Browser": 5,
+            "Computer Use": 4,
+            "Tools": 15,
+            "Workflow": 3,
+            "Database": 2,
+            "Voice": 1,
+            "API": 13,
+            "Security": 2
+          }
+        },
+        {
+          "project": "with-agent-tool",
+          "path": "examples\\with-agent-tool",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 7,
+            "RAG": 2,
+            "Tools": 6,
+            "Workflow": 4,
+            "API": 1,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-airtable",
+          "path": "examples\\with-airtable",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 5,
+            "Memory": 1,
+            "Tools": 4,
+            "API": 3,
+            "Security": 2
+          }
+        },
+        {
+          "project": "with-amazon-bedrock",
+          "path": "examples\\with-amazon-bedrock",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 5,
+            "Agent": 5,
+            "Memory": 2,
+            "RAG": 1,
+            "Tools": 4,
+            "API": 5,
+            "Security": 6
+          }
+        },
+        {
+          "project": "with-anthropic",
+          "path": "examples\\with-anthropic",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 4,
+            "Agent": 5,
+            "Memory": 2,
+            "Tools": 5,
+            "API": 3,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-assistant-ui",
+          "path": "examples\\with-assistant-ui",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 4,
+            "Agent": 11,
+            "Memory": 8,
+            "RAG": 2,
+            "Computer Use": 2,
+            "Tools": 13,
+            "Voice": 1,
+            "API": 18,
+            "Security": 3
+          }
+        },
+        {
+          "project": "with-auth",
+          "path": "examples\\with-auth",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 6,
+            "Memory": 2,
+            "RAG": 3,
+            "Tools": 6,
+            "API": 5,
+            "Security": 3
+          }
+        },
+        {
+          "project": "with-cerbos",
+          "path": "examples\\with-cerbos",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 6,
+            "Memory": 5,
+            "RAG": 2,
+            "Tools": 11,
+            "API": 7,
+            "Security": 9
+          }
+        },
+        {
+          "project": "with-chat-sdk",
+          "path": "examples\\with-chat-sdk",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 6,
+            "Memory": 1,
+            "Tools": 4,
+            "Database": 3,
+            "API": 6,
+            "Security": 4
+          }
+        },
+        {
+          "project": "with-chroma",
+          "path": "examples\\with-chroma",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 7,
+            "Agent": 7,
+            "Memory": 3,
+            "RAG": 13,
+            "Tools": 3,
+            "Database": 4,
+            "API": 5,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-client-side-tools",
+          "path": "examples\\with-client-side-tools",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 11,
+            "Browser": 2,
+            "Tools": 10,
+            "Database": 1,
+            "API": 11,
+            "Security": 4
+          }
+        },
+        {
+          "project": "with-cloudflare-workers",
+          "path": "examples\\with-cloudflare-workers",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 7,
+            "Memory": 2,
+            "RAG": 4,
+            "Tools": 5,
+            "Workflow": 2,
+            "Database": 2,
+            "API": 7,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-composio-mcp",
+          "path": "examples\\with-composio-mcp",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 5,
+            "Memory": 3,
+            "RAG": 2,
+            "Tools": 7,
+            "API": 4,
+            "Security": 3
+          }
+        },
+        {
+          "project": "client",
+          "path": "examples\\with-copilotkit\\client",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 3,
+            "RAG": 1,
+            "Tools": 2,
+            "API": 4
+          }
+        },
+        {
+          "project": "server",
+          "path": "examples\\with-copilotkit\\server",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 4,
+            "RAG": 1,
+            "Tools": 2,
+            "API": 5
+          }
+        },
+        {
+          "project": "with-custom-endpoints",
+          "path": "examples\\with-custom-endpoints",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 5,
+            "Memory": 1,
+            "RAG": 1,
+            "API": 9,
+            "Security": 6
+          }
+        },
+        {
+          "project": "with-dynamic-parameters",
+          "path": "examples\\with-dynamic-parameters",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 5,
+            "Memory": 4,
+            "RAG": 1,
+            "Tools": 4,
+            "API": 3,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-dynamic-prompts",
+          "path": "examples\\with-dynamic-prompts",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 5,
+            "Memory": 2,
+            "RAG": 1,
+            "Tools": 2,
+            "API": 3,
+            "Security": 2
+          }
+        },
+        {
+          "project": "with-feedback",
+          "path": "examples\\with-feedback",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 5,
+            "RAG": 1,
+            "API": 4,
+            "Security": 2
+          }
+        },
+        {
+          "project": "with-google-ai",
+          "path": "examples\\with-google-ai",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 5,
+            "Memory": 2,
+            "RAG": 1,
+            "Tools": 2,
+            "API": 3,
+            "Security": 1
+          }
+        },
+        {
+          "project": "client",
+          "path": "examples\\with-google-drive-mcp\\client",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "Agent": 2,
+            "Memory": 4,
+            "RAG": 1,
+            "Browser": 1,
+            "Tools": 1,
+            "API": 3,
+            "Security": 4
+          }
+        },
+        {
+          "project": "server",
+          "path": "examples\\with-google-drive-mcp\\server",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 5,
+            "Memory": 2,
+            "RAG": 1,
+            "Tools": 4,
+            "Database": 2,
+            "Voice": 1,
+            "API": 5,
+            "Security": 3
+          }
+        },
+        {
+          "project": "with-google-vertex-ai",
+          "path": "examples\\with-google-vertex-ai",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 5,
+            "Memory": 2,
+            "RAG": 1,
+            "Tools": 2,
+            "API": 3,
+            "Security": 4
+          }
+        },
+        {
+          "project": "with-groq-ai",
+          "path": "examples\\with-groq-ai",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 5,
+            "Memory": 2,
+            "RAG": 1,
+            "Tools": 2,
+            "API": 3,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-guardrails",
+          "path": "examples\\with-guardrails",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 5,
+            "Memory": 2,
+            "Tools": 2,
+            "API": 3,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-hooks",
+          "path": "examples\\with-hooks",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 4,
+            "Agent": 4,
+            "Memory": 3,
+            "RAG": 1,
+            "Tools": 4,
+            "API": 3,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-hugging-face-mcp",
+          "path": "examples\\with-hugging-face-mcp",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 5,
+            "Agent": 5,
+            "Memory": 2,
+            "RAG": 1,
+            "Tools": 7,
+            "Voice": 3,
+            "API": 5,
+            "Security": 6
+          }
+        },
+        {
+          "project": "with-jwt-auth",
+          "path": "examples\\with-jwt-auth",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 6,
+            "Memory": 2,
+            "Tools": 4,
+            "Workflow": 2,
+            "Voice": 1,
+            "API": 8,
+            "Security": 13
+          }
+        },
+        {
+          "project": "with-lancedb",
+          "path": "examples\\with-lancedb",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 6,
+            "Agent": 8,
+            "Memory": 3,
+            "RAG": 12,
+            "Tools": 4,
+            "Database": 2,
+            "API": 5,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-langfuse",
+          "path": "examples\\with-langfuse",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 8,
+            "Memory": 2,
+            "RAG": 2,
+            "Tools": 8,
+            "Database": 1,
+            "API": 5,
+            "Security": 2
+          }
+        },
+        {
+          "project": "with-live-evals",
+          "path": "examples\\with-live-evals",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 4,
+            "Agent": 6,
+            "Memory": 2,
+            "Tools": 6,
+            "Workflow": 1,
+            "API": 5
+          }
+        },
+        {
+          "project": "with-mcp",
+          "path": "examples\\with-mcp",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 5,
+            "Memory": 3,
+            "RAG": 1,
+            "Tools": 7,
+            "API": 3
+          }
+        },
+        {
+          "project": "with-mcp-elicitation",
+          "path": "examples\\with-mcp-elicitation",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 4,
+            "Memory": 2,
+            "Tools": 11,
+            "API": 6
+          }
+        },
+        {
+          "project": "go-server",
+          "path": "examples\\with-mcp-elicitation\\go-server",
+          "type": [
+            "Go"
+          ],
+          "capabilities": {
+            "Memory": 1,
+            "Tools": 2,
+            "API": 1
+          }
+        },
+        {
+          "project": "with-mcp-server",
+          "path": "examples\\with-mcp-server",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 5,
+            "Memory": 2,
+            "RAG": 1,
+            "Tools": 7,
+            "Workflow": 4,
+            "API": 5
+          }
+        },
+        {
+          "project": "with-memory-rest-api",
+          "path": "examples\\with-memory-rest-api",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 5,
+            "Memory": 3,
+            "RAG": 2,
+            "Tools": 2,
+            "Database": 3,
+            "API": 9
+          }
+        },
+        {
+          "project": "with-middleware",
+          "path": "examples\\with-middleware",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 4,
+            "Memory": 1,
+            "RAG": 1,
+            "API": 4,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-nestjs",
+          "path": "examples\\with-nestjs",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 16,
+            "Memory": 1,
+            "Tools": 5,
+            "Workflow": 2,
+            "API": 12,
+            "Security": 2
+          }
+        },
+        {
+          "project": "with-netlify-functions",
+          "path": "examples\\with-netlify-functions",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 8,
+            "Memory": 1,
+            "Tools": 5,
+            "API": 6,
+            "Security": 2
+          }
+        },
+        {
+          "project": "with-nextjs",
+          "path": "examples\\with-nextjs",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 19,
+            "Memory": 7,
+            "RAG": 8,
+            "Tools": 5,
+            "API": 11
+          }
+        },
+        {
+          "project": "with-nextjs-resumable-stream",
+          "path": "examples\\with-nextjs-resumable-stream",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 4,
+            "Agent": 21,
+            "Memory": 20,
+            "RAG": 4,
+            "Computer Use": 3,
+            "Tools": 18,
+            "Workflow": 2,
+            "Database": 1,
+            "Voice": 2,
+            "API": 16,
+            "Security": 9
+          }
+        },
+        {
+          "project": "with-nuxt",
+          "path": "examples\\with-nuxt",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 10,
+            "Memory": 3,
+            "RAG": 4,
+            "Tools": 6,
+            "Database": 2,
+            "API": 7,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-offline-evals",
+          "path": "examples\\with-offline-evals",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 8,
+            "Memory": 3,
+            "Tools": 2,
+            "Workflow": 1,
+            "API": 1
+          }
+        },
+        {
+          "project": "with-ollama",
+          "path": "examples\\with-ollama",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 5,
+            "Tools": 3,
+            "API": 6
+          }
+        },
+        {
+          "project": "with-openrouter",
+          "path": "examples\\with-openrouter",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 4,
+            "Memory": 2,
+            "RAG": 2,
+            "API": 5,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-peaka-mcp",
+          "path": "examples\\with-peaka-mcp",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 5,
+            "Memory": 2,
+            "RAG": 1,
+            "Computer Use": 1,
+            "Tools": 7,
+            "API": 4,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-pinecone",
+          "path": "examples\\with-pinecone",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 7,
+            "Agent": 7,
+            "Memory": 3,
+            "RAG": 14,
+            "Tools": 4,
+            "Database": 4,
+            "API": 6,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-planagents",
+          "path": "examples\\with-planagents",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 9,
+            "Memory": 2,
+            "RAG": 1,
+            "Tools": 7,
+            "API": 6
+          }
+        },
+        {
+          "project": "with-playwright",
+          "path": "examples\\with-playwright",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 14,
+            "Memory": 11,
+            "RAG": 2,
+            "Browser": 19,
+            "Computer Use": 5,
+            "Tools": 22,
+            "API": 3,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-postgres",
+          "path": "examples\\with-postgres",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 5,
+            "Memory": 3,
+            "RAG": 1,
+            "Tools": 2,
+            "Database": 4,
+            "API": 3,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-qdrant",
+          "path": "examples\\with-qdrant",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 7,
+            "Agent": 9,
+            "Memory": 4,
+            "RAG": 13,
+            "Tools": 5,
+            "Database": 4,
+            "API": 6,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-rag-chatbot",
+          "path": "examples\\with-rag-chatbot",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 5,
+            "Memory": 3,
+            "RAG": 5,
+            "Tools": 4,
+            "API": 3
+          }
+        },
+        {
+          "project": "with-recipe-generator",
+          "path": "examples\\with-recipe-generator",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 5,
+            "Memory": 2,
+            "RAG": 2,
+            "Tools": 6,
+            "API": 7,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-research-assistant",
+          "path": "examples\\with-research-assistant",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 5,
+            "Memory": 2,
+            "RAG": 2,
+            "Tools": 6,
+            "Workflow": 3,
+            "API": 5,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-resumable-streams",
+          "path": "examples\\with-resumable-streams",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 5,
+            "RAG": 1,
+            "Database": 2,
+            "API": 5,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-retries-fallback",
+          "path": "examples\\with-retries-fallback",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 4,
+            "Memory": 1,
+            "RAG": 1,
+            "API": 4,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-retrieval",
+          "path": "examples\\with-retrieval",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 5,
+            "Agent": 8,
+            "Memory": 5,
+            "RAG": 10,
+            "Tools": 6,
+            "Database": 1,
+            "API": 5,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-slack",
+          "path": "examples\\with-slack",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 6,
+            "Memory": 1,
+            "Tools": 5,
+            "API": 4,
+            "Security": 2
+          }
+        },
+        {
+          "project": "with-subagents",
+          "path": "examples\\with-subagents",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 6,
+            "Memory": 2,
+            "RAG": 3,
+            "Tools": 4,
+            "API": 3,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-summarization",
+          "path": "examples\\with-summarization",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 4,
+            "Memory": 2,
+            "RAG": 1,
+            "Tools": 2,
+            "API": 4,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-supabase",
+          "path": "examples\\with-supabase",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 5,
+            "Memory": 2,
+            "RAG": 1,
+            "Tools": 4,
+            "API": 3,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-tavily-search",
+          "path": "examples\\with-tavily-search",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 6,
+            "Memory": 1,
+            "RAG": 2,
+            "Tools": 5,
+            "Workflow": 1,
+            "Database": 1,
+            "API": 10,
+            "Security": 3
+          }
+        },
+        {
+          "project": "with-thinking-tool",
+          "path": "examples\\with-thinking-tool",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 5,
+            "Memory": 1,
+            "RAG": 1,
+            "Tools": 5,
+            "API": 3,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-tool-routing",
+          "path": "examples\\with-tool-routing",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 5,
+            "Memory": 1,
+            "RAG": 1,
+            "Tools": 5,
+            "API": 3,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-tools",
+          "path": "examples\\with-tools",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 8,
+            "Memory": 2,
+            "RAG": 4,
+            "Tools": 11,
+            "Database": 1,
+            "API": 5,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-turso",
+          "path": "examples\\with-turso",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 5,
+            "Memory": 3,
+            "RAG": 1,
+            "Tools": 2,
+            "Database": 1,
+            "API": 3,
+            "Security": 2
+          }
+        },
+        {
+          "project": "with-vector-search",
+          "path": "examples\\with-vector-search",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 4,
+            "Agent": 5,
+            "Memory": 2,
+            "RAG": 8,
+            "Database": 1,
+            "API": 4,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-vercel-ai",
+          "path": "examples\\with-vercel-ai",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 5,
+            "Memory": 2,
+            "RAG": 1,
+            "Tools": 4,
+            "API": 3,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-viteval",
+          "path": "examples\\with-viteval",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 13,
+            "Agent": 25,
+            "Memory": 5,
+            "RAG": 12,
+            "Tools": 4,
+            "API": 11,
+            "Security": 2
+          }
+        },
+        {
+          "project": "with-voice-elevenlabs",
+          "path": "examples\\with-voice-elevenlabs",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 5,
+            "Memory": 2,
+            "RAG": 1,
+            "Tools": 2,
+            "Voice": 6,
+            "API": 4,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-voice-openai",
+          "path": "examples\\with-voice-openai",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 4,
+            "Agent": 5,
+            "Memory": 2,
+            "RAG": 1,
+            "Tools": 2,
+            "Voice": 5,
+            "API": 4,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-voice-xsai",
+          "path": "examples\\with-voice-xsai",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 5,
+            "Memory": 2,
+            "RAG": 1,
+            "Tools": 2,
+            "Voice": 4,
+            "API": 4,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-voltagent-actions",
+          "path": "examples\\with-voltagent-actions",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 7,
+            "Tools": 9,
+            "Workflow": 2,
+            "API": 10,
+            "Security": 5
+          }
+        },
+        {
+          "project": "with-voltagent-exporter",
+          "path": "examples\\with-voltagent-exporter",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 8,
+            "Memory": 2,
+            "RAG": 2,
+            "Tools": 8,
+            "Database": 1,
+            "API": 5,
+            "Security": 2
+          }
+        },
+        {
+          "project": "with-voltagent-managed-memory",
+          "path": "examples\\with-voltagent-managed-memory",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 4,
+            "Memory": 3,
+            "RAG": 4,
+            "Database": 3,
+            "API": 6,
+            "Security": 3
+          }
+        },
+        {
+          "project": "with-voltops-resumable-streams",
+          "path": "examples\\with-voltops-resumable-streams",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 5,
+            "RAG": 1,
+            "Database": 1,
+            "API": 5,
+            "Security": 2
+          }
+        },
+        {
+          "project": "with-voltops-retrieval",
+          "path": "examples\\with-voltops-retrieval",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 6,
+            "Memory": 3,
+            "RAG": 10,
+            "Tools": 3,
+            "API": 3,
+            "Security": 2
+          }
+        },
+        {
+          "project": "with-whatsapp",
+          "path": "examples\\with-whatsapp",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 9,
+            "Memory": 7,
+            "RAG": 2,
+            "Tools": 9,
+            "Database": 5,
+            "Voice": 1,
+            "API": 8,
+            "Security": 8
+          }
+        },
+        {
+          "project": "with-workflow",
+          "path": "examples\\with-workflow",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 5,
+            "Memory": 1,
+            "Tools": 2,
+            "Workflow": 4,
+            "API": 3,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-workflow-chain",
+          "path": "examples\\with-workflow-chain",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 5,
+            "Memory": 1,
+            "Tools": 2,
+            "Workflow": 4,
+            "API": 3,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-working-memory",
+          "path": "examples\\with-working-memory",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 5,
+            "Memory": 5,
+            "RAG": 5,
+            "Tools": 2,
+            "API": 5,
+            "Security": 2
+          }
+        },
+        {
+          "project": "with-workspace",
+          "path": "examples\\with-workspace",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 6,
+            "Memory": 9,
+            "RAG": 10,
+            "Browser": 16,
+            "Computer Use": 6,
+            "Tools": 2,
+            "Workflow": 6,
+            "Database": 2,
+            "API": 7,
+            "Security": 16
+          }
+        },
+        {
+          "project": "with-xquik-tools",
+          "path": "examples\\with-xquik-tools",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 5,
+            "Tools": 8,
+            "Voice": 1,
+            "API": 10,
+            "Security": 4
+          }
+        },
+        {
+          "project": "with-youtube-to-blog",
+          "path": "examples\\with-youtube-to-blog",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 5,
+            "Memory": 2,
+            "RAG": 2,
+            "Tools": 5,
+            "API": 3,
+            "Security": 1
+          }
+        },
+        {
+          "project": "with-zapier-mcp",
+          "path": "examples\\with-zapier-mcp",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 5,
+            "Memory": 2,
+            "RAG": 1,
+            "Tools": 7,
+            "API": 6,
+            "Security": 3
+          }
+        },
+        {
+          "project": "a2a-server",
+          "path": "packages\\a2a-server",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 18,
+            "Memory": 8,
+            "RAG": 5,
+            "Tools": 4,
+            "Workflow": 1,
+            "Voice": 3,
+            "API": 14
+          }
+        },
+        {
+          "project": "ag-ui",
+          "path": "packages\\ag-ui",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 13,
+            "Memory": 5,
+            "RAG": 1,
+            "Tools": 5,
+            "Voice": 1,
+            "API": 8
+          }
+        },
+        {
+          "project": "cli",
+          "path": "packages\\cli",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 5,
+            "Agent": 30,
+            "Memory": 6,
+            "RAG": 5,
+            "Browser": 4,
+            "Computer Use": 2,
+            "Tools": 11,
+            "Workflow": 6,
+            "Database": 1,
+            "Voice": 4,
+            "API": 22,
+            "Security": 21
+          }
+        },
+        {
+          "project": "cloudflare-d1",
+          "path": "packages\\cloudflare-d1",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 5,
+            "Memory": 10,
+            "RAG": 4,
+            "Tools": 4,
+            "Workflow": 6,
+            "Database": 5,
+            "API": 3
+          }
+        },
+        {
+          "project": "core",
+          "path": "packages\\core",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 49,
+            "Agent": 74,
+            "Memory": 66,
+            "RAG": 40,
+            "Browser": 3,
+            "Computer Use": 3,
+            "Tools": 73,
+            "Workflow": 24,
+            "Database": 5,
+            "Voice": 9,
+            "API": 54,
+            "Security": 22
+          }
+        },
+        {
+          "project": "create-voltagent-app",
+          "path": "packages\\create-voltagent-app",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 27,
+            "Agent": 19,
+            "Memory": 4,
+            "RAG": 7,
+            "Browser": 1,
+            "Computer Use": 2,
+            "Tools": 18,
+            "Workflow": 12,
+            "Database": 1,
+            "Voice": 4,
+            "API": 23,
+            "Security": 3
+          }
+        },
+        {
+          "project": "docs-mcp",
+          "path": "packages\\docs-mcp",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 4,
+            "Agent": 10,
+            "Memory": 5,
+            "RAG": 2,
+            "Computer Use": 1,
+            "Tools": 14,
+            "Workflow": 4,
+            "Database": 3,
+            "Voice": 4,
+            "API": 5,
+            "Security": 3
+          }
+        },
+        {
+          "project": "e2e",
+          "path": "packages\\e2e",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 4,
+            "Memory": 4,
+            "RAG": 2,
+            "Tools": 4,
+            "Database": 3
+          }
+        },
+        {
+          "project": "evals",
+          "path": "packages\\evals",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 12,
+            "Memory": 5,
+            "RAG": 2,
+            "Tools": 2,
+            "Workflow": 1,
+            "API": 3,
+            "Security": 3
+          }
+        },
+        {
+          "project": "internal",
+          "path": "packages\\internal",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 11,
+            "Memory": 4,
+            "RAG": 2,
+            "Browser": 1,
+            "Tools": 10,
+            "Workflow": 4,
+            "API": 7
+          }
+        },
+        {
+          "project": "langfuse-exporter",
+          "path": "packages\\langfuse-exporter",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 6,
+            "Agent": 7,
+            "Memory": 5,
+            "RAG": 5,
+            "Browser": 1,
+            "Tools": 6,
+            "Workflow": 3,
+            "Database": 1,
+            "Voice": 2,
+            "API": 5,
+            "Security": 4
+          }
+        },
+        {
+          "project": "libsql",
+          "path": "packages\\libsql",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 5,
+            "Agent": 19,
+            "Memory": 22,
+            "RAG": 22,
+            "Browser": 2,
+            "Computer Use": 2,
+            "Tools": 6,
+            "Workflow": 10,
+            "Database": 19,
+            "Voice": 5,
+            "API": 8,
+            "Security": 8
+          }
+        },
+        {
+          "project": "logger",
+          "path": "packages\\logger",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 3,
+            "Agent": 15,
+            "Memory": 13,
+            "RAG": 3,
+            "Browser": 1,
+            "Tools": 2,
+            "Workflow": 5,
+            "API": 11,
+            "Security": 7
+          }
+        },
+        {
+          "project": "mcp-server",
+          "path": "packages\\mcp-server",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 24,
+            "Memory": 18,
+            "RAG": 3,
+            "Browser": 1,
+            "Tools": 35,
+            "Workflow": 17,
+            "Voice": 5,
+            "API": 22,
+            "Security": 2
+          }
+        },
+        {
+          "project": "postgres",
+          "path": "packages\\postgres",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 4,
+            "Agent": 12,
+            "Memory": 13,
+            "RAG": 17,
+            "Browser": 1,
+            "Tools": 2,
+            "Workflow": 9,
+            "Database": 20,
+            "API": 4
+          }
+        },
+        {
+          "project": "rag",
+          "path": "packages\\rag",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 2,
+            "RAG": 14,
+            "API": 2
+          }
+        },
+        {
+          "project": "resumable-streams",
+          "path": "packages\\resumable-streams",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 8,
+            "Memory": 9,
+            "Database": 5,
+            "API": 5,
+            "Security": 3
+          }
+        },
+        {
+          "project": "sandbox-blaxel",
+          "path": "packages\\sandbox-blaxel",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 9,
+            "Memory": 1,
+            "RAG": 2,
+            "Tools": 3,
+            "Voice": 1,
+            "API": 10,
+            "Security": 14
+          }
+        },
+        {
+          "project": "sandbox-daytona",
+          "path": "packages\\sandbox-daytona",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 5,
+            "Tools": 2,
+            "API": 3,
+            "Security": 4
+          }
+        },
+        {
+          "project": "sandbox-e2b",
+          "path": "packages\\sandbox-e2b",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 5,
+            "Tools": 2,
+            "Voice": 2,
+            "API": 3,
+            "Security": 4
+          }
+        },
+        {
+          "project": "scorers",
+          "path": "packages\\scorers",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 10,
+            "Agent": 18,
+            "Memory": 16,
+            "RAG": 3,
+            "Tools": 8,
+            "Voice": 1,
+            "API": 7,
+            "Security": 1
+          }
+        },
+        {
+          "project": "sdk",
+          "path": "packages\\sdk",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 4,
+            "Agent": 12,
+            "Memory": 3,
+            "RAG": 11,
+            "Tools": 4,
+            "Workflow": 6,
+            "Database": 2,
+            "Voice": 1,
+            "API": 16,
+            "Security": 7
+          }
+        },
+        {
+          "project": "server-core",
+          "path": "packages\\server-core",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 6,
+            "Agent": 76,
+            "Memory": 41,
+            "RAG": 15,
+            "Browser": 1,
+            "Tools": 47,
+            "Workflow": 39,
+            "Database": 4,
+            "Voice": 7,
+            "API": 96,
+            "Security": 44
+          }
+        },
+        {
+          "project": "server-elysia",
+          "path": "packages\\server-elysia",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 9,
+            "Agent": 49,
+            "Memory": 15,
+            "RAG": 8,
+            "Tools": 25,
+            "Workflow": 21,
+            "Database": 1,
+            "Voice": 2,
+            "API": 64,
+            "Security": 32
+          }
+        },
+        {
+          "project": "example",
+          "path": "packages\\server-elysia\\example",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 4,
+            "Memory": 1,
+            "Tools": 1,
+            "API": 5
+          }
+        },
+        {
+          "project": "server-hono",
+          "path": "packages\\server-hono",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 11,
+            "Agent": 36,
+            "Memory": 17,
+            "RAG": 9,
+            "Browser": 1,
+            "Tools": 23,
+            "Workflow": 19,
+            "Database": 2,
+            "Voice": 6,
+            "API": 109,
+            "Security": 42
+          }
+        },
+        {
+          "project": "serverless-hono",
+          "path": "packages\\serverless-hono",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 1,
+            "Agent": 17,
+            "Memory": 10,
+            "RAG": 7,
+            "Tools": 8,
+            "Workflow": 6,
+            "Database": 3,
+            "Voice": 2,
+            "API": 19,
+            "Security": 5
+          }
+        },
+        {
+          "project": "supabase",
+          "path": "packages\\supabase",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 6,
+            "Agent": 10,
+            "Memory": 11,
+            "RAG": 9,
+            "Browser": 2,
+            "Tools": 6,
+            "Workflow": 9,
+            "Database": 7,
+            "Voice": 2,
+            "API": 10
+          }
+        },
+        {
+          "project": "vercel-ai-exporter",
+          "path": "packages\\vercel-ai-exporter",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 6,
+            "Agent": 9,
+            "Memory": 3,
+            "RAG": 5,
+            "Tools": 8,
+            "Workflow": 4,
+            "Database": 2,
+            "API": 4,
+            "Security": 4
+          }
+        },
+        {
+          "project": "voice",
+          "path": "packages\\voice",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 11,
+            "Agent": 12,
+            "Memory": 2,
+            "RAG": 6,
+            "Browser": 1,
+            "Tools": 5,
+            "Workflow": 3,
+            "Database": 1,
+            "Voice": 35,
+            "API": 12,
+            "Security": 2
+          }
+        },
+        {
+          "project": "voltagent-memory",
+          "path": "packages\\voltagent-memory",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 2,
+            "Agent": 7,
+            "Memory": 6,
+            "RAG": 8,
+            "Tools": 2,
+            "Workflow": 5,
+            "Database": 4,
+            "API": 6,
+            "Security": 3
+          }
+        },
+        {
+          "project": "core",
+          "path": "tools\\core",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 4,
+            "Agent": 5,
+            "RAG": 3,
+            "Tools": 7,
+            "API": 1
+          }
+        },
+        {
+          "project": "website",
+          "path": "website",
+          "type": [
+            "Node/TypeScript"
+          ],
+          "capabilities": {
+            "LLM": 105,
+            "Agent": 141,
+            "Memory": 62,
+            "RAG": 87,
+            "Browser": 18,
+            "Computer Use": 3,
+            "Tools": 123,
+            "Workflow": 94,
+            "Database": 39,
+            "Voice": 32,
+            "API": 129,
+            "Security": 131
+          }
+        }
+      ]
+    }
+  ]
+}

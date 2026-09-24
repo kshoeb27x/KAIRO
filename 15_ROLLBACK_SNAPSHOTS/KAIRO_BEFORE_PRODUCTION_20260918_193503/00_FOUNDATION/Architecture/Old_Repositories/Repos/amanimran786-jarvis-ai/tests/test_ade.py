@@ -1,0 +1,502 @@
+"""
+Tests for the ADE (Autonomous Dev Environment) package.
+
+All subprocess, filesystem, and tmux calls are mocked.
+"""
+from __future__ import annotations
+
+import json
+import sys
+import time
+import tempfile
+from pathlib import Path
+from unittest.mock import MagicMock, patch, call
+
+import pytest
+
+# ── Ensure ade package is importable ─────────────────────────────────────────
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
+# ── Fixtures ──────────────────────────────────────────────────────────────────
+
+@pytest.fixture()
+def repo(tmp_path):
+    """Minimal fake repo root: initialise git so commands don't error."""
+    subprocess_mod = __import__("subprocess")
+    subprocess_mod.run(["git", "init", str(tmp_path)], capture_output=True)
+    subprocess_mod.run(
+        ["git", "commit", "--allow-empty", "-m", "init"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        env={**__import__("os").environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+             "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"},
+    )
+    return tmp_path
+
+
+# ── ade.state ─────────────────────────────────────────────────────────────────
+
+class TestState:
+    def test_upsert_and_load(self, repo):
+        from ade import state as st
+        st.upsert(repo, "my-task", status="PLANNING", prompt="do stuff")
+        data = st.load(repo)
+        assert "my-task" in data
+        assert data["my-task"]["status"] == "PLANNING"
+        assert data["my-task"]["prompt"] == "do stuff"
+
+    def test_set_status(self, repo):
+        from ade import state as st
+        st.upsert(repo, "t1", status="PLANNING")
+        st.set_status(repo, "t1", "EXECUTING")
+        assert st.get(repo, "t1")["status"] == "EXECUTING"
+
+    def test_remove(self, repo):
+        from ade import state as st
+        st.upsert(repo, "t2", status="DONE")
+        st.remove(repo, "t2")
+        assert st.get(repo, "t2") is None
+
+    def test_load_missing_file_returns_empty(self, repo):
+        from ade import state as st
+        assert st.load(repo / "nonexistent_parent") == {}
+
+    def test_upsert_merges_fields(self, repo):
+        from ade import state as st
+        st.upsert(repo, "t3", status="PLANNING", retries=0)
+        st.upsert(repo, "t3", retries=2)
+        entry = st.get(repo, "t3")
+        assert entry["retries"] == 2
+        assert entry["status"] == "PLANNING"  # not overwritten
+
+
+# ── ade.notify ────────────────────────────────────────────────────────────────
+
+class TestNotify:
+    def test_send_calls_osascript_on_darwin(self):
+        from ade import notify
+        with patch("platform.system", return_value="Darwin"), \
+             patch("subprocess.run") as mock_run:
+            notify.send("Title", "Message")
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        assert cmd[0] == "osascript"
+
+    def test_send_calls_notify_send_on_linux(self):
+        from ade import notify
+        with patch("platform.system", return_value="Linux"), \
+             patch("subprocess.run") as mock_run:
+            notify.send("Title", "Message")
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        assert cmd[0] == "notify-send"
+
+    def test_send_does_not_raise_on_failure(self):
+        from ade import notify
+        with patch("platform.system", return_value="Darwin"), \
+             patch("subprocess.run", side_effect=OSError("no osascript")):
+            notify.send("T", "M")  # must not raise
+
+
+# ── ade.session ───────────────────────────────────────────────────────────────
+
+class TestSession:
+    def test_exists_true_when_returncode_zero(self):
+        from ade import session
+        with patch("shutil.which", return_value="/usr/bin/tmux"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            assert session.exists("ade-foo") is True
+
+    def test_exists_false_when_returncode_nonzero(self):
+        from ade import session
+        with patch("shutil.which", return_value="/usr/bin/tmux"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            assert session.exists("ade-foo") is False
+
+    def test_list_sessions_parses_output(self):
+        from ade import session
+        with patch("shutil.which", return_value="/usr/bin/tmux"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "ade-task1\nade-task2\n"
+            result = session.list_sessions()
+        assert result == ["ade-task1", "ade-task2"]
+
+    def test_list_sessions_empty_on_failure(self):
+        from ade import session
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            mock_run.return_value.stdout = ""
+            assert session.list_sessions() == []
+
+    def test_create_raises_if_tmux_missing(self, tmp_path):
+        from ade import session
+        with patch("shutil.which", return_value=None):
+            with pytest.raises(RuntimeError, match="tmux not found"):
+                session.create("ade-t", tmp_path, tmp_path / "loop", "t", "p", tmp_path)
+
+    def test_create_raises_if_session_exists(self, tmp_path):
+        from ade import session
+        with patch("shutil.which", return_value="/usr/bin/tmux"), \
+             patch.object(session, "exists", return_value=True):
+            with pytest.raises(RuntimeError, match="already exists"):
+                session.create("ade-t", tmp_path, tmp_path / "loop", "t", "p", tmp_path)
+
+    def test_create_calls_tmux_new_session(self, tmp_path):
+        from ade import session
+        with patch("shutil.which", return_value="/usr/bin/tmux"), \
+             patch.object(session, "exists", return_value=False), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            session.create("ade-t", tmp_path, tmp_path / "loop", "t", "my prompt", tmp_path)
+        cmd = mock_run.call_args[0][0]
+        assert cmd[:3] == ["tmux", "new-session", "-d"]
+        assert "ade-t" in cmd
+        assert "my prompt" in cmd
+
+
+# ── ade.loop — test detection ─────────────────────────────────────────────────
+
+class TestDetectTestCmd:
+    def test_detects_npm_test(self, tmp_path):
+        from ade.loop import detect_test_cmd
+        (tmp_path / "package.json").write_text('{"scripts": {"test": "jest"}}')
+        assert detect_test_cmd(tmp_path) == ["npm", "test"]
+
+    def test_skips_npm_if_no_test_script(self, tmp_path):
+        from ade.loop import detect_test_cmd
+        (tmp_path / "package.json").write_text('{"scripts": {"build": "webpack"}}')
+        (tmp_path / "pytest.ini").write_text("")
+        assert detect_test_cmd(tmp_path)[0:2] == [sys.executable, "-m"]
+
+    def test_detects_makefile_test(self, tmp_path):
+        from ade.loop import detect_test_cmd
+        (tmp_path / "Makefile").write_text("\ntest:\n\tpytest\n")
+        assert detect_test_cmd(tmp_path) == ["make", "test"]
+
+    def test_detects_pytest_via_ini(self, tmp_path):
+        from ade.loop import detect_test_cmd
+        (tmp_path / "pytest.ini").write_text("")
+        cmd = detect_test_cmd(tmp_path)
+        assert cmd[1:3] == ["-m", "pytest"]
+
+    def test_detects_pytest_via_tests_dir(self, tmp_path):
+        from ade.loop import detect_test_cmd
+        (tmp_path / "tests").mkdir()
+        cmd = detect_test_cmd(tmp_path)
+        assert "pytest" in cmd
+
+    def test_detects_cargo_test(self, tmp_path):
+        from ade.loop import detect_test_cmd
+        (tmp_path / "Cargo.toml").write_text("[package]")
+        assert detect_test_cmd(tmp_path) == ["cargo", "test"]
+
+    def test_returns_none_when_undetectable(self, tmp_path):
+        from ade.loop import detect_test_cmd
+        assert detect_test_cmd(tmp_path) is None
+
+
+# ── ade.loop — phase_verify ───────────────────────────────────────────────────
+
+class TestPhaseVerify:
+    def test_returns_true_on_pass(self, tmp_path, repo):
+        from ade.loop import phase_verify
+        (tmp_path / "pytest.ini").write_text("")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "5 passed"
+            mock_run.return_value.stderr = ""
+            passed, errors = phase_verify("task", tmp_path, repo)
+        assert passed is True
+        assert errors == ""
+
+    def test_returns_false_on_fail(self, tmp_path, repo):
+        from ade.loop import phase_verify
+        (tmp_path / "pytest.ini").write_text("")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            mock_run.return_value.stdout = ""
+            mock_run.return_value.stderr = "FAILED test_foo"
+            passed, errors = phase_verify("task", tmp_path, repo)
+        assert passed is False
+        assert "FAILED" in errors
+
+    def test_returns_true_when_no_test_suite(self, tmp_path, repo):
+        from ade.loop import phase_verify
+        passed, errors = phase_verify("task", tmp_path, repo)
+        assert passed is True
+
+    def test_handles_timeout(self, tmp_path, repo):
+        from ade.loop import phase_verify
+        import subprocess
+        (tmp_path / "pytest.ini").write_text("")
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("pytest", 600)):
+            passed, errors = phase_verify("task", tmp_path, repo)
+        assert passed is False
+        assert "timed out" in errors
+
+
+class TestClaudePromptCommand:
+    def test_claude_prompt_cmd_is_permission_safe_by_default(self, monkeypatch):
+        from ade.loop import _claude_prompt_cmd
+        monkeypatch.delenv("ADE_CLAUDE_SKIP_PERMISSIONS", raising=False)
+        cmd = _claude_prompt_cmd("plan")
+        assert cmd == ["claude", "-p", "plan"]
+
+    def test_claude_prompt_cmd_allows_explicit_skip_permissions_opt_in(self, monkeypatch):
+        from ade.loop import _claude_prompt_cmd
+        monkeypatch.setenv("ADE_CLAUDE_SKIP_PERMISSIONS", "1")
+        cmd = _claude_prompt_cmd("plan")
+        assert cmd == ["claude", "--dangerously-skip-permissions", "-p", "plan"]
+
+
+class TestPhasePlanAutoApprove:
+    """Unattended orchestration: the plan gate must NOT block on input() when
+    ADE_AUTO_APPROVE_PLAN is set, otherwise every fleet worker hangs forever."""
+
+    def test_human_gate_blocks_on_input_by_default(self, tmp_path, repo, monkeypatch):
+        from ade.loop import phase_plan
+        monkeypatch.delenv("ADE_AUTO_APPROVE_PLAN", raising=False)
+        (tmp_path / "PLAN.md").write_text("# plan")
+        with patch("ade.loop._run_interactive", return_value=0), \
+             patch("ade.loop.notify.send"), \
+             patch("builtins.input", return_value="") as mock_input:
+            approved = phase_plan("task", "do x", tmp_path, repo)
+        assert approved is True
+        mock_input.assert_called_once()  # human gate engaged
+
+    def test_auto_approve_skips_input_when_env_set(self, tmp_path, repo, monkeypatch):
+        from ade.loop import phase_plan
+        monkeypatch.setenv("ADE_AUTO_APPROVE_PLAN", "1")
+        (tmp_path / "PLAN.md").write_text("# plan")
+        with patch("ade.loop._run_interactive", return_value=0), \
+             patch("ade.loop.notify.send"), \
+             patch("builtins.input", side_effect=AssertionError("input() must not be called")) as mock_input:
+            approved = phase_plan("task", "do x", tmp_path, repo)
+        assert approved is True
+        mock_input.assert_not_called()  # unattended: no human gate
+
+
+class TestPostToolHookScoping:
+    """Finding B: the lint/format hook must touch only files the agent changed,
+    never the whole worktree — otherwise `ade sync` merges a repo-wide reformat."""
+
+    def test_hook_targets_only_changed_files(self, tmp_path):
+        from ade import loop
+        f1, f2 = tmp_path / "a.py", tmp_path / "b.py"
+        f1.write_text("x=1\n")
+        f2.write_text("y=2\n")
+        with patch("ade.loop._changed_py_files", return_value=[f1, f2]), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            loop.run_post_tool_hook(tmp_path)
+        assert mock_run.call_args_list, "hook ran no commands"
+        targets_seen: set[str] = set()
+        for c in mock_run.call_args_list:
+            cmd = c.args[0]
+            assert str(tmp_path) not in cmd  # never targets the whole worktree root
+            targets_seen.update(p for p in cmd if p in (str(f1), str(f2)))
+        assert targets_seen == {str(f1), str(f2)}
+
+    def test_hook_skips_entirely_when_no_changed_files(self, tmp_path):
+        from ade import loop
+        with patch("ade.loop._changed_py_files", return_value=[]), \
+             patch("subprocess.run") as mock_run:
+            passed, out = loop.run_post_tool_hook(tmp_path)
+        assert passed is True
+        mock_run.assert_not_called()
+
+
+class TestPhaseVerifyScoping:
+    """Finding A: an orchestrator must be able to scope or skip the test phase
+    per lane, instead of always running the full repo suite."""
+
+    def test_uses_ade_test_cmd_override(self, tmp_path, repo, monkeypatch):
+        from ade.loop import phase_verify
+        monkeypatch.setenv("ADE_TEST_CMD", "pytest tests/test_foo.py -q")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="1 passed", stderr="")
+            passed, errors = phase_verify("task", tmp_path, repo)
+        assert passed is True
+        assert mock_run.call_args.args[0] == ["pytest", "tests/test_foo.py", "-q"]
+
+    def test_skip_verify_env_returns_true_without_running(self, tmp_path, repo, monkeypatch):
+        from ade.loop import phase_verify
+        monkeypatch.setenv("ADE_SKIP_VERIFY", "1")
+        with patch("subprocess.run") as mock_run:
+            passed, errors = phase_verify("task", tmp_path, repo)
+        assert passed is True
+        assert errors == ""
+        mock_run.assert_not_called()
+
+
+# ── ade.cli ───────────────────────────────────────────────────────────────────
+
+class TestCli:
+    def test_list_prints_no_tasks_when_empty(self, repo, capsys):
+        from ade.cli import cmd_list
+        with patch("ade.cli._repo_root", return_value=repo), \
+             patch("ade.session.list_sessions", return_value=[]):
+            cmd_list()
+        out = capsys.readouterr().out
+        assert "No active tasks" in out
+
+    def test_list_shows_task_entries(self, repo, capsys):
+        from ade import state as st
+        from ade.cli import cmd_list
+        st.upsert(repo, "refactor-login", status="EXECUTING", session="ade-refactor-login", prompt="Refactor")
+        with patch("ade.cli._repo_root", return_value=repo), \
+             patch("ade.session.list_sessions", return_value=["ade-refactor-login"]):
+            cmd_list()
+        out = capsys.readouterr().out
+        assert "refactor-login" in out
+        assert "EXECUTING" in out
+
+    def test_watch_exits_if_session_missing(self, repo):
+        from ade.cli import cmd_watch
+        with patch("ade.cli._repo_root", return_value=repo), \
+             patch("ade.session.exists", return_value=False), \
+             pytest.raises(SystemExit):
+            cmd_watch("missing-task")
+
+    def test_stop_kills_session_and_removes_state(self, repo):
+        from ade import state as st
+        from ade.cli import cmd_stop
+        worktree = repo / ".worktrees" / "my-task"
+        st.upsert(repo, "my-task", session="ade-my-task", worktree_path=str(worktree))
+        with patch("ade.cli._repo_root", return_value=repo), \
+             patch("ade.session.kill") as mock_kill, \
+             patch("subprocess.run") as mock_sub:
+            mock_sub.return_value.returncode = 0
+            cmd_stop("my-task")
+        mock_kill.assert_called_once_with("ade-my-task")
+        assert st.get(repo, "my-task") is None
+
+    def test_sync_handles_merge_conflict(self, repo, capsys):
+        from ade import state as st
+        from ade.cli import cmd_sync
+        worktree = repo / ".worktrees" / "task-x"
+        worktree.mkdir(parents=True)
+        st.upsert(repo, "task-x", branch="ade/task-x", worktree_path=str(worktree))
+
+        def fake_run(cmd, **kw):
+            r = MagicMock()
+            if "merge" in cmd:
+                r.returncode = 1
+                r.stdout = "CONFLICT (content): Merge conflict in foo.py"
+                r.stderr = ""
+            else:
+                r.returncode = 0
+                r.stdout = ""
+                r.stderr = ""
+            return r
+
+        with patch("ade.cli._repo_root", return_value=repo), \
+             patch("subprocess.run", side_effect=fake_run), \
+             patch("ade.notify.send") as mock_notify:
+            cmd_sync("task-x")
+
+        out = capsys.readouterr().out
+        assert "conflict" in out.lower()
+        mock_notify.assert_called_once()
+        assert "conflict" in mock_notify.call_args[0][0].lower() or \
+               "conflict" in mock_notify.call_args[0][1].lower()
+
+    def test_sync_does_not_commit_plan_scratch(self, repo):
+        import subprocess
+
+        from ade import state as st
+        from ade.cli import cmd_sync
+
+        def git(cwd, *args):
+            return subprocess.run(
+                ["git", *args],
+                cwd=str(cwd),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+        git(repo, "config", "user.email", "t@example.com")
+        git(repo, "config", "user.name", "Test")
+
+        worktree = repo / ".worktrees" / "task-x"
+        git(repo, "worktree", "add", "-b", "ade/task-x", str(worktree), "HEAD")
+
+        (worktree / "feature.py").write_text("VALUE = 1\n")
+        (worktree / "PLAN.md").write_text("# scratch\n")
+        st.upsert(repo, "task-x", branch="ade/task-x", worktree_path=str(worktree))
+
+        with patch("ade.cli._repo_root", return_value=repo):
+            cmd_sync("task-x")
+
+        tree = git(repo, "ls-tree", "-r", "--name-only", "HEAD").stdout.splitlines()
+        assert "feature.py" in tree
+        assert "PLAN.md" not in tree
+
+
+# ── ade approvals command ─────────────────────────────────────────────────────
+
+class TestCmdApprovals:
+    def test_lists_pending_items(self, capsys):
+        from ade.cli import cmd_approvals
+        import httpx as _httpx
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = [
+            {"stream_id": "100-0", "task_id": "t-devops", "output": "deploy prod"},
+        ]
+        with patch("httpx.get", return_value=mock_resp):
+            cmd_approvals()
+
+        out = capsys.readouterr().out
+        assert "100-0" in out
+        assert "t-devops" in out
+
+    def test_prints_no_pending_when_empty(self, capsys):
+        from ade.cli import cmd_approvals
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = []
+        with patch("httpx.get", return_value=mock_resp):
+            cmd_approvals()
+
+        assert "No pending" in capsys.readouterr().out
+
+    def test_approve_posts_to_event_bus(self, capsys):
+        from ade.cli import cmd_approvals
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"status": "approve", "task_id": "t-devops"}
+        with patch("httpx.post", return_value=mock_resp) as mock_post:
+            cmd_approvals(approve_id="100-0", reason="looks good")
+
+        call_url = mock_post.call_args[0][0]
+        assert "100-0" in call_url
+        body = mock_post.call_args[1]["json"]
+        assert body["decision"] == "approve"
+        assert body["reason"] == "looks good"
+
+    def test_reject_posts_decision_reject(self, capsys):
+        from ade.cli import cmd_approvals
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"status": "reject", "task_id": "t-risky"}
+        with patch("httpx.post", return_value=mock_resp) as mock_post:
+            cmd_approvals(reject_id="200-0", reason="too risky")
+
+        body = mock_post.call_args[1]["json"]
+        assert body["decision"] == "reject"
+
+    def test_bus_unreachable_prints_error(self, capsys):
+        from ade.cli import cmd_approvals
+
+        with patch("httpx.get", side_effect=Exception("connection refused")):
+            cmd_approvals()
+
+        assert "event bus" in capsys.readouterr().err.lower()

@@ -1,0 +1,176 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+// web/src/components/UpdatesCard.tsx
+//
+// Admin-only "Updates" status + actions, rendered in Settings. Shows the
+// current vs latest version + last-checked time, a "Check now" button, and —
+// where the host supports it — "Upgrade now" and "Roll back". On hosts that
+// can't self-upgrade (Docker, unsupervised) it shows the server's platform
+// guidance instead of a button. All actions are admin-only server-side.
+
+import { useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Download, RotateCcw, RefreshCw } from 'lucide-react'
+import { api } from '@/api/client'
+import { waitForNewVersionThenReload, driveUpgrade, phaseLabel } from '@/api/upgradeReload'
+import styles from './UpdatesCard.module.css'
+
+interface UpdateInfo {
+  enabled:           boolean
+  current:           string
+  latest?:           string
+  newer_available:   boolean
+  release_url?:      string | null
+  last_checked?:     string
+  host_kind?:        string
+  can_self_upgrade?: boolean
+  upgrade_guidance?: string | null
+  /** Credential-stripped release source URL checks go to (read-only). */
+  source?:           string
+}
+interface RollbackInfo {
+  current:   string
+  snapshots: { version: string; has_config: boolean }[]
+}
+
+function ago(iso?: string): string {
+  if (!iso) return 'never'
+  const t = new Date(iso).getTime()
+  if (Number.isNaN(t)) return 'never'
+  const s = Math.max(0, Math.floor((Date.now() - t) / 1000))
+  if (s < 60)    return 'just now'
+  if (s < 3600)  return `${Math.floor(s / 60)}m ago`
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`
+  return `${Math.floor(s / 86400)}d ago`
+}
+
+export default function UpdatesCard() {
+  const qc = useQueryClient()
+  const [msg, setMsg] = useState<string | null>(null)
+
+  const info = useQuery<UpdateInfo>({
+    queryKey: ['update-check'],
+    queryFn:  () => api.get('/api/admin/update-check').then((r) => r.data),
+    refetchOnWindowFocus: false,
+  })
+  const rb = useQuery<RollbackInfo>({
+    queryKey: ['rollback-list'],
+    queryFn:  () => api.get('/api/admin/rollback').then((r) => r.data),
+    refetchOnWindowFocus: false,
+  })
+
+  const checkNow = useMutation({
+    mutationFn: () => api.get('/api/admin/update-check?force=true').then((r) => r.data),
+    onSuccess:  (d) => { qc.setQueryData(['update-check'], d); setMsg(null) },
+    // A misconfigured source returns a non-2xx with a helpful error+source; make
+    // it visible instead of failing silently.
+    onError:    (e: any) => setMsg(e?.response?.data?.error ?? 'Update check failed — see server logs.'),
+  })
+  // After an upgrade/rollback kicks off, wait for the server to restart onto a
+  // new version and reload the page automatically — no manual "Reload" click.
+  const awaitRestart = () => {
+    const current = info.data?.current ?? ''
+    setMsg('MIRA is restarting — this page will reload automatically when it\'s back…')
+    void waitForNewVersionThenReload(current).then((reloaded) => {
+      if (!reloaded) setMsg('Still restarting — if this page doesn\'t reload shortly, refresh it manually.')
+    })
+  }
+  // Upgrade drives the server's real progress (phase + bytes) rather than a
+  // blind wait, and only declares trouble when the server says so.
+  const driveUpgradeNow = async () => {
+    const current = info.data?.current ?? ''
+    const res = await driveUpgrade(current, (s) => {
+      if (!s) return
+      const pct = s.bytes_total > 0 ? ` (${Math.min(100, Math.round((s.bytes_done / s.bytes_total) * 100))}%)` : ''
+      setMsg(`Upgrading${s.target_version ? ` to v${s.target_version}` : ''} — ${phaseLabel(s.phase)}${pct}… no need to re-click.`)
+    })
+    if (!res.ok) setMsg(res.error
+      ? `${res.error.charAt(0).toUpperCase()}${res.error.slice(1)}. You can also run \`mira upgrade --binary\` from a terminal.`
+      : 'Still working — it may be downloading on a slow connection. Refresh manually if needed.')
+  }
+  const upgrade = useMutation({
+    mutationFn: () => api.post('/api/admin/upgrade').then((r) => r.data),
+    onSuccess:  () => { void driveUpgradeNow() },
+    onError:    (e: any) => {
+      // 409 = already upgrading (a re-click) → attach to the in-flight job.
+      if (e?.response?.status === 409) void driveUpgradeNow()
+      else setMsg('Upgrade failed to start — try `mira upgrade` from a terminal.')
+    },
+  })
+  const rollback = useMutation({
+    mutationFn: (version: string) => api.post('/api/admin/rollback', { version }).then((r) => r.data),
+    onSuccess:  () => awaitRestart(),
+    onError:    (e: any) => setMsg(e?.response?.data?.error ?? 'Rollback failed to start.'),
+  })
+
+  const d = info.data
+  // On a misconfigured/unreachable source the endpoint returns a non-2xx whose
+  // body still carries the (credential-stripped) source + a diagnostic error.
+  const errData = (info.error as any)?.response?.data as { error?: string; source?: string } | undefined
+  const source = d?.source ?? errData?.source
+  const snaps = rb.data?.snapshots ?? []
+  // Only offer a rollback to a version OTHER than the one we're running.
+  const rollbackTarget = snaps.find((s) => s.version !== d?.current)
+
+  return (
+    <div className={styles.card}>
+      <div className={styles.status}>
+        {info.isLoading ? 'Checking…'
+          : info.isError ? <><b>Update check failed.</b> <span className={styles.dim}>{errData?.error ?? 'The release source was unreachable.'}</span></>
+          : d?.enabled === false ? <>Automatic checks are off. Current version <b>v{d?.current}</b>.</>
+          : d?.newer_available ? <><b>Update available: v{d.latest}</b> — you're on v{d.current}. <span className={styles.dim}>· checked {ago(d.last_checked)}</span></>
+          : <>You're up to date — <b>v{d?.current}</b>. <span className={styles.dim}>· checked {ago(d?.last_checked)}</span></>}
+      </div>
+
+      {/* Read-only transparency: exactly where update checks go. Editing stays a
+          deliberate config action (server.update_check.source_url). */}
+      {source && (
+        <div className={styles.dim} style={{ fontSize: 12, marginTop: 2, wordBreak: 'break-all' }}>
+          Source: {source}
+        </div>
+      )}
+
+      <div className={styles.actions}>
+        <button className={styles.btn} onClick={() => checkNow.mutate()} disabled={checkNow.isPending}>
+          <RefreshCw size={13} /> {checkNow.isPending ? 'Checking…' : 'Check now'}
+        </button>
+
+        {d?.newer_available && d?.can_self_upgrade && (
+          <button
+            className={`${styles.btn} ${styles.primary}`}
+            disabled={upgrade.isPending}
+            onClick={() => {
+              if (confirm(`Upgrade to v${d.latest}? MIRA will download, verify, swap and restart.`)) upgrade.mutate()
+            }}
+          >
+            <Download size={13} /> {upgrade.isPending ? 'Starting…' : `Upgrade now to v${d.latest}`}
+          </button>
+        )}
+
+        {rollbackTarget && d?.can_self_upgrade && (
+          <button
+            className={styles.btn}
+            disabled={rollback.isPending}
+            onClick={() => {
+              if (confirm(`Roll back to v${rollbackTarget.version}? MIRA restores the previous binary + config and restarts.`))
+                rollback.mutate(rollbackTarget.version)
+            }}
+          >
+            <RotateCcw size={13} /> {rollback.isPending ? 'Starting…' : `Roll back to v${rollbackTarget.version}`}
+          </button>
+        )}
+
+        {d?.release_url && (
+          <a className={styles.link} href={d.release_url} target="_blank" rel="noreferrer">Release notes ↗</a>
+        )}
+      </div>
+
+      {/* Platform guidance when we can't self-upgrade (Docker / unsupervised). */}
+      {d?.newer_available && !d?.can_self_upgrade && d?.upgrade_guidance && (
+        <div className={styles.guidance}>{d.upgrade_guidance}</div>
+      )}
+
+      {msg && <div className={styles.msg}>{msg}</div>}
+    </div>
+  )
+}

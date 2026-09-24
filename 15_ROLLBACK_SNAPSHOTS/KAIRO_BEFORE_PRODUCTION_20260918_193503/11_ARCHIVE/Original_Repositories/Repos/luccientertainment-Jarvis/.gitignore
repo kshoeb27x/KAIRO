@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+
+# Environment / secrets
+.env
+!.env.example
+*.key
+*.pem
+credentials.json
+token.json
+client_secret*.json
+
+Jarvis private/local data
+backend/assets/inbox.json
+backend/assets/active_research.json
+backend/assets/completed_research.json
+backend/assets/calendar_monitor.json
+backend/assets/google_contacts.json#backend/assets/*.json
+
+# Node / React
+node_modules/
+dist/
+jarvis-ui/node_modules/
+jarvis-ui/dist/
+
+# Logs
+*.log
+logs/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Audio/cache/model output
+*.wav
+*.mp3
+*.ogg
+.cache/
+models/

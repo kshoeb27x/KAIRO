@@ -1,0 +1,5910 @@
+"""
+Jarvis Router — intent detection and tool dispatch.
+
+Architecture:
+  1. Fast-path: unambiguous commands (timer, volume, etc.) skip the LLM entirely
+  2. Hardware: registered device commands checked before orchestration
+  3. Orchestrator: Haiku classifies intent in ~300ms → dispatches right tool
+  4. Fallback: smart_stream (model_router) for pure conversation
+
+The orchestrator replaces the old regex wall. New tools need only an entry
+in orchestrator.TOOLS — no regex patterns to write.
+"""
+
+import logging
+import re
+import os
+import sys
+import shutil
+import threading
+import time
+import tools
+from harness.audit import audit_log
+from harness import web_search as _ws
+import terminal
+import browser
+from desktop import overlay
+import notes
+import google_services as gs
+import camera
+import meeting_listener
+import memory as mem
+import memory_layer
+import evals
+import skills
+import vault
+import vault_capture
+import jarvis_agents as _jagents
+import jarvis_watcher as _jwatcher
+import jarvis_health as _jhealth
+import jarvis_executor as _jexec
+import mem0_layer as _m0
+import source_ingest
+import skill_factory
+from local_runtime import local_training
+from local_runtime import local_model_eval
+from local_runtime import local_model_automation
+from local_runtime import local_improvement
+from local_runtime import local_beta
+from local_runtime import local_model_benchmark
+from local_runtime import model_fleet
+import interview_profile
+import semantic_memory as _smem
+import specialized_agents
+import behavior_hooks
+import capability_evals
+import capability_parity
+import capability_report
+import cost_policy
+import context_budget
+import coder_workbench
+import external_agent_patterns
+import production_readiness
+import security_roe
+import usage_tracker
+import prompt_modifiers
+import self_improve as si
+import hardware as hw
+import runtime_state
+import messages as msg
+import messages_thread as msg_thread
+import call_privacy
+import provider_router
+import safety_permissions as perms
+from operative_approval import RouteContext, redact_approval_ids
+from model_router import (
+    smart_stream,
+    format_with_mini,
+    get_mode,
+    set_mode,
+    describe_runtime_for,
+    set_forced_model,
+    clear_forced_model,
+)
+
+_on_timer_done = None
+
+
+def set_timer_callback(fn):
+    global _on_timer_done
+    _on_timer_done = fn
+
+
+def _s(text: str):
+    return iter([text])
+
+
+# Compiled once — matches wake words and polite lead-ins at the start of a message.
+_POLITE_PREFIX_RE = re.compile(
+    r"^(?:(?:jarvis|hey\s+jarvis|ok\s+jarvis|okay\s+jarvis)\s*[,!]?\s*)?"
+    r"(?:(?:can\s+you|could\s+you|would\s+you|please|can\s+u)\s+)*",
+    flags=re.IGNORECASE,
+)
+
+
+def _strip_polite_prefix(text: str) -> str:
+    """Strip wake-word and polite/filler prefixes before message parsing.
+
+    'Jarvis, can you text dad' -> 'text dad'
+    'please text mom hi'       -> 'text mom hi'
+    'can you message Alex'     -> 'message Alex'
+    """
+    return _POLITE_PREFIX_RE.sub("", (text or "").strip()).strip()
+
+
+def _strip_message_modifiers(text: str) -> str:
+    """Remove channel hints and scope hints that clutter message recipient/body parsing.
+
+    Examples:
+      "send a message to dad in my contacts using iMessage, to get milk"
+      -> "send a message to dad, to get milk"
+
+      "send a message to mom via SMS saying I'll be late"
+      -> "send a message to mom saying I'll be late"
+
+    Returns the text with modifiers stripped and whitespace normalized.
+    """
+    cleaned = text
+    # Remove scope hints: "in my contacts", "from my contacts", "from contacts"
+    cleaned = re.sub(r"\s+(?:in|from)\s+(?:my\s+)?contacts\b", "", cleaned, flags=re.IGNORECASE)
+    # Remove channel hints: "using iMessage/SMS", "via iMessage/SMS/text", "on iMessage", "over text", "through Messages"
+    cleaned = re.sub(r"\s+(?:using|via|on|over|through)\s+(?:i\s*message|imessage|sms|text|messages)\b", "", cleaned, flags=re.IGNORECASE)
+    # Normalize whitespace
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def _parse_timer(text: str):
+    match = re.search(r"(\d+)\s*(second|minute|hour)s?", text, re.IGNORECASE)
+    if not match:
+        return None
+    amount = int(match.group(1))
+    unit = match.group(2).lower()
+    seconds = amount * {"second": 1, "minute": 60, "hour": 3600}[unit]
+    return seconds, f"{amount} {unit}{'s' if amount > 1 else ''}"
+
+
+def _is_timer_request(lower: str) -> bool:
+    return any(p in lower for p in ("set a timer", "timer for", "remind me in")) or bool(
+        re.search(r"\b(?:set|start|create)\s+(?:a\s+)?\d+\s*(?:second|minute|hour)s?\s+timer\b", lower)
+    )
+
+
+def _parse_calendar_reminder(text: str):
+    """Parse natural 'remind me to X at Y' / 'remind me at Y to X' / 'schedule X at Y' into (title, dt) or None.
+
+    Returns (event_title: str, start_dt: datetime) or None if not parseable.
+    Handles same-day and tomorrow HH:MM AM/PM patterns — complex scheduling falls to orchestrator.
+    """
+    import datetime
+
+    # Extract the clock time
+    time_match = re.search(
+        r"\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", text, re.IGNORECASE
+    )
+    if not time_match:
+        return None
+
+    hour   = int(time_match.group(1))
+    minute = int(time_match.group(2) or 0)
+    ampm   = (time_match.group(3) or "").lower()
+
+    if ampm == "pm" and hour < 12:
+        hour += 12
+    elif ampm == "am" and hour == 12:
+        hour = 0
+    elif not ampm and hour < 7:
+        # Ambiguous — assume PM for afternoon sanity (e.g., "at 3" → 3 PM)
+        hour += 12
+
+    # Detect explicit "tomorrow" offset
+    force_tomorrow = bool(re.search(r"\btomorrow\b", text, re.IGNORECASE))
+
+    def _make_dt(h: int, m: int, force_next_day: bool) -> datetime.datetime:
+        now = datetime.datetime.now()
+        candidate = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        if force_next_day:
+            return candidate + datetime.timedelta(days=1)
+        if candidate <= now:
+            candidate += datetime.timedelta(days=1)
+        return candidate
+
+    # "remind me at TIME to TITLE" — time comes before the task
+    time_first_match = re.search(
+        r"remind\s+me\s+(?:tomorrow\s+)?at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s+to\s+(.+)",
+        text, re.IGNORECASE,
+    )
+    if time_first_match:
+        title = time_first_match.group(1).strip().strip(".,;")
+        if title and len(title) >= 3:
+            return title, _make_dt(hour, minute, force_tomorrow)
+
+    # "set a reminder for tomorrow at TIME to TASK" / "set a reminder at TIME for TASK"
+    set_reminder_match = re.search(
+        r"set\s+(?:a\s+)?reminder\s+(?:for\s+(?:tomorrow\s+)?)?at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s+(?:for|to)\s+(.+)",
+        text, re.IGNORECASE,
+    )
+    if set_reminder_match:
+        title = set_reminder_match.group(1).strip().strip(".,;")
+        if title and len(title) >= 2:
+            return title, _make_dt(hour, minute, force_tomorrow)
+
+    # "remind me to TITLE at TIME" / "remind me tomorrow at TIME to TITLE" and other verb-first patterns
+    title_match = re.search(
+        r"(?:remind\s+me\s+(?:tomorrow\s+)?to|schedule|add\s+(?:a\s+)?(?:meeting|event|appointment|reminder)\s+(?:for|with|to)?|"
+        r"create\s+(?:a\s+)?(?:meeting|event|calendar\s+event)\s+(?:for|with)?|"
+        r"book\s+(?:a\s+)?(?:meeting|call|slot)\s+(?:for|with)?)\s+(.+?)\s+(?:tomorrow\s+)?at\s+\d",
+        text, re.IGNORECASE,
+    )
+    if not title_match:
+        return None
+
+    title = title_match.group(1).strip().strip(".,;")
+    if not title or len(title) < 3:
+        return None
+
+    return title, _make_dt(hour, minute, force_tomorrow)
+
+
+def _schedule_osascript_alarm(title: str, dt) -> str:
+    """Spawn a background osascript process that fires a macOS notification at dt."""
+    import datetime
+    import subprocess
+    now = datetime.datetime.now()
+    delay_secs = max(0, int((dt - now).total_seconds()))
+    flat_title = title.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+    safe_title = browser._escape_applescript(flat_title)
+    script = f'delay {delay_secs}\ndisplay notification "{safe_title}" with title "Jarvis Reminder" sound name "Glass"'
+    subprocess.Popen(["osascript", "-e", script])
+    return f"Reminder set for {dt.strftime('%-I:%M %p')}: {title}."
+
+
+def _parse_app(text: str):
+    match = re.search(r"\b(?:open|launch|start)\b\s+(?:up\s+)?(?:the\s+)?(?:my\s+)?(.+)", text, re.IGNORECASE)
+    return match.group(1).strip() if match else None
+
+
+def _parse_volume(text: str):
+    match = re.search(r"(\d+)(?:\s*%)?", text)
+    return int(match.group(1)) if match else None
+
+
+def _parse_browser_target(text: str):
+    # CDP browser integration: Use local_runtime.local_browser.fetch_page(url)
+    # in web search path instead of subprocess opening Chrome. Provides headless
+    # CDP-based page fetching with self-healing skill selectors.
+    match = re.search(r"\b(?:browse to|open website|open site|go to|search(?: the web| google)? for)\b\s+(.+)", text, re.IGNORECASE)
+    if not match:
+        return None
+    target = match.group(1).strip()
+    target = re.split(
+        r"(?:,\s*click\b|\b(?:and then|then|and)\b\s+(?:summari[sz]e|tell me|what's|what is|click|go back|go forward|reload|refresh)|\bclick\b)",
+        target,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
+    return target.strip(" ,.?") or None
+
+
+def _parse_browser_click_target(text: str):
+    match = re.search(
+        r"\bclick(?: on)?(?: the)?\s+(.+?)(?=(?:,\s*|\b(?:and then|then|and)\b\s+)(?:summari[sz]e|tell me|what's|what is|go back|go forward|reload|refresh)|[.?!]|$)",
+        text,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    label = match.group(1).strip(" ,.?\"'")
+    label = re.sub(r"\b(?:link|button)\b$", "", label, flags=re.IGNORECASE).strip(" ,.?\"'")
+    return label or None
+
+
+def _extract_url(text: str) -> str:
+    """Pull the first https?:// URL from freeform text."""
+    m = re.search(r"https?://\S+", text)
+    if not m:
+        return ""
+    return m.group(0).rstrip(".,;:\"')")
+
+
+def _parse_source_target(text: str) -> str | None:
+    match = re.search(
+        r"\b(?:ingest|add to the vault|put in the vault)\b(?:\s+(?:source|file|repo|repository|url|notes))?(?:\s+from)?\s+(.+)",
+        text,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    target = match.group(1).strip()
+    target = re.sub(r"\s+(?:into|in)\s+the\s+vault\b.*$", "", target, flags=re.IGNORECASE).strip()
+    target = target.strip(" \"'")
+    target = re.sub(r"[.?!]+$", "", target)
+    return target or None
+
+
+def _parse_background_vault_task(text: str) -> str | None:
+    match = re.search(
+        r"\b(?:queue|run|start|submit)\b\s+(?:a\s+)?(?:background\s+)?(?:vault|brain|obsidian)\s+task\b\s*:?\s+(.+)$",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if match:
+        return match.group(1).strip()
+    match = re.search(
+        r"\b(?:have|let)\b\s+(?:the\s+)?vault\s+curator\b(?:\s+work\s+on)?(?:\s+in\s+the\s+background)?\s*:?\s+(.+)$",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if match:
+        return match.group(1).strip()
+    return None
+
+
+def _parse_skill_topic(text: str) -> str | None:
+    match = re.search(r"\b(?:create|generate|make|build)\b\s+(?:a\s+)?skill(?:\s+from\s+the\s+vault)?(?:\s+(?:about|for))\s+(.+)", text, re.IGNORECASE)
+    if not match:
+        return None
+    return match.group(1).strip(" .")
+
+
+def _is_skill_proposal_request(lower: str) -> bool:
+    return bool(
+        re.search(r"\b(?:propose|draft|plan|review)\b.*\bskill\b", lower)
+        or re.search(r"\bskill\s+(?:builder|proposal|draft)\b", lower)
+        or "local skill loop" in lower
+    )
+
+
+def _is_user_identity_query(lower: str) -> bool:
+    """Detect 'who am I' — user asking for their own identity/profile."""
+    return bool(re.search(r"^who\s+am\s+i\b|^tell\s+me\s+who\s+i\s+am\b", lower.strip()))
+
+
+def _is_capabilities_query(lower: str) -> bool:
+    """Detect 'what can you do' / 'what are your capabilities'."""
+    return bool(re.search(
+        r"\bwhat\s+(?:can\s+you\s+do|do\s+you\s+do|are\s+your\s+(?:capabilities|features|skills|abilities))\b"
+        r"|\bhow\s+can\s+you\s+help\b"
+        r"|\bwhat\s+(?:are\s+)?you\s+capable\s+of\b",
+        lower,
+    ))
+
+
+def _capabilities_reply() -> str:
+    return capability_report.capabilities_reply()
+
+
+def _is_model_status_query(lower: str) -> bool:
+    return bool(re.search(r"\b(what model are you using|which model are you using|what model are you on|are you using ollama|are you local|are you cloud|are you open source|what mode are you in|which mode are you in)\b", lower))
+
+
+def _is_capability_boundary_query(lower: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(limitations|limits|boundaries|scope|constraints|what can.t you do|what can't you do|what are your constraints|protocol error)\b",
+            lower,
+        )
+    )
+
+
+def _capability_boundary_reply() -> str:
+    return (
+        "My scope is defined by the permissions, tools, and live context available to me. "
+        "I can act on this Mac, retrieve what I can verify from runtime output, memory, and the vault, and carry out your objective directly. "
+        "I do not assume authority I have not been given, and I do not present guesses as facts."
+    )
+
+
+def _is_constraint_bypass_query(lower: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(bypass|overwrite|remove|disable)\b.*\b(constraints|limitations|boundaries|guardrails|safety|permissions|protocol)\b"
+            r"|\b(unrestricted|no limitations|ignore protocol|rewrite your rules)\b",
+            lower,
+        )
+    )
+
+
+def _is_identity_override_query(lower: str) -> bool:
+    """Catch attempts to overwrite Jarvis's identity via the prompt."""
+    return bool(
+        re.search(
+            r"\byou are (not jarvis|gpt|chatgpt|claude|llama|gemini|openai|anthropic|a different|now called|actually)\b"
+            r"|\b(pretend|act|roleplay|imagine|from now on).*(you are|you're|as if you)\b"
+            r"|\byou are no longer jarvis\b"
+            r"|\bforget (that you are|you are) jarvis\b",
+            lower,
+        )
+    )
+
+
+def _identity_override_reply() -> str:
+    return (
+        "I'm Jarvis — that's not something a prompt can change. "
+        "My identity is set by the runtime, not by conversation input."
+    )
+
+
+def _constraint_bypass_reply() -> str:
+    return (
+        "I will not bypass runtime safety and permission controls. "
+        "I can still execute your goals at full speed by implementing explicit, auditable changes in code and config where policy allows it. "
+        "Give me a concrete module or behavior target and I will apply a production-grade rewrite."
+    )
+
+
+def _requested_mode(lower: str) -> str | None:
+    if any(p in lower for p in ("switch to open-source mode", "switch to open source mode", "use open-source mode", "use open source mode")):
+        return "open-source"
+    if "switch to local mode" in lower or "use local mode" in lower:
+        return "local"
+    if "switch to cloud mode" in lower or "use cloud mode" in lower:
+        return "cloud"
+    if "switch to auto mode" in lower or "use auto mode" in lower:
+        return "auto"
+    return None
+
+
+def _requested_model_override(text: str) -> dict | None:
+    lower = (text or "").lower().strip()
+    if not lower:
+        return None
+    if any(p in lower for p in ("clear model", "reset model", "auto model", "model auto", "default model")):
+        return {"action": "clear"}
+    match = re.search(r"\b(?:use|switch|route|set)\s+(?:model|llm)\s+(?:to|as)?\s*([\w:._-]+)", lower)
+    if match:
+        return {"action": "set", "model": match.group(1)}
+    return None
+
+
+def _is_specialized_agent_query(lower: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(use specialized agents|use smart agents|use agents|multi-pass|planner executor reviewer|science expert|security reviewer|security analyst|debugger|researcher|operator|vault curator|self-improve critic)\b",
+            lower,
+        )
+    )
+
+
+def _is_self_improve_safety_query(lower: str) -> bool:
+    return (
+        ("improve your own code" in lower or "improve yourself safely" in lower or "before writing any file" in lower)
+        or ("self improve" in lower and any(p in lower for p in ("safely", "safe", "before writing", "before changing")))
+        or ("improve yourself" in lower and any(
+            p in lower for p in (
+                "what evidence", "what would you need", "would you need", "before changing code",
+                "before writing code", "before writing any file", "what steps", "how would you",
+                "what happens", "explain", "policy", "gate"
+            )
+        ))
+    )
+
+
+def _is_self_review_query(lower: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(review your own code|review your code|self review|what are your shortcomings|what are your weaknesses|review yourself|analyze your shortcomings|analyse your shortcomings)\b",
+            lower,
+        )
+    )
+
+
+def _is_confirm_improvement_query(lower: str) -> bool:
+    """User is approving a pending self-improvement."""
+    return (
+        _pending_improvements[0] is not None
+        and bool(re.search(
+            r"\b(apply|yes|go ahead|confirm|do it|looks good|approved|approve|sure|ok|okay)\b",
+            lower,
+        ))
+        and not re.search(r"\b(don'?t|do not|cancel|discard|reject|no)\b", lower)
+    )
+
+
+def _is_cancel_improvement_query(lower: str) -> bool:
+    """User is rejecting a pending self-improvement."""
+    return (
+        _pending_improvements[0] is not None
+        and bool(re.search(r"\b(cancel|discard|reject|no|don'?t apply|abort)\b", lower))
+    )
+
+
+def _runtime_status_reply(user_input: str) -> str:
+    mode = get_mode()
+    skill = skills.choose_skill(user_input, tool="chat")
+    summary = describe_runtime_for(user_input, skill_id=skill.id if skill else None)
+    policy = provider_router.runtime_policy()
+    return (
+        f"This answer is coming from Jarvis's runtime status layer, not from a model-generated reply. "
+        f"{summary} The current routing mode is {mode}. "
+        f"Free-first is {'enabled' if policy.get('free_first_enabled') else 'disabled'}, "
+        f"paid fallback is {'enabled' if policy.get('paid_fallback_enabled') else 'disabled'}, "
+        f"and mini-tier provider priority is {', '.join(policy.get('provider_priority', {}).get('mini', []))}."
+    )
+
+
+def _self_improve_safety_reply() -> str:
+    return (
+        "I should not change my own code unless there are enough recent eval failures to justify it. "
+        "Right now the gate is evidence first: I look for at least two recent logged failures pointing at the same weak path, and without that I should refuse the change. "
+        "Only after that do I identify the target file, generate the update, syntax-validate it, back up the original, write atomically, and ask for a restart."
+    )
+
+
+def _is_personal_interest_query(lower: str) -> bool:
+    return any(
+        phrase in lower for phrase in (
+            "tell me something interesting based on what you know about me",
+            "tell me something interesting about me",
+            "what's interesting about me",
+            "what do you know about me that is interesting",
+        )
+    )
+
+
+def _is_engineering_specialist_query(lower: str) -> bool:
+    if "race condition" in lower and any(term in lower for term in ("python", "worker", "thread", "reproducible", "reproduce")):
+        return True
+    if any(term in lower for term in ("stale data", "cache invalidation", "replica lag", "read-after-write")):
+        return True
+    if all(term in lower for term in ("fastapi", "nginx", "502")):
+        return True
+    return False
+
+
+def _is_interview_profile_query(lower: str) -> bool:
+    if _is_engineering_specialist_query(lower):
+        return False
+    return (
+        interview_profile.is_career_narrative_query(lower)
+        or interview_profile.is_application_status_query(lower)
+        or interview_profile.is_interview_prep_query(lower)
+        or interview_profile.is_tell_me_about_yourself_query(lower)
+        or interview_profile.is_role_fit_query(lower)
+        or interview_profile.is_company_fit_query(lower)
+        or interview_profile.is_why_now_query(lower)
+        or interview_profile.is_enforcement_decision_query(lower)
+        or interview_profile.is_quality_measurement_query(lower)
+        or interview_profile.is_data_story_query(lower)
+        or interview_profile.is_spike_diagnosis_query(lower)
+        or interview_profile.is_engineering_pushback_query(lower)
+        or interview_profile.is_behavioral_story_query(lower)
+        or interview_profile.is_situational_query(lower)
+        or "why this direction" in lower
+        or "why this path" in lower
+    )
+
+
+def _is_locking_tradeoff_query(lower: str) -> bool:
+    return "optimistic locking" in lower and "pessimistic locking" in lower
+
+
+def _locking_tradeoff_reply() -> str:
+    return (
+        "Default to optimistic locking when conflicts are rare and retries are cheap, because it preserves throughput and avoids blocking readers and writers up front. "
+        "Use pessimistic locking only when contention is common, the cost of a retry is high, or the critical section cannot tolerate a race, because it trades concurrency for certainty. "
+        "The real tradeoff is retry cost versus lock contention, so check how often conflicts actually happen before choosing. "
+        "If you have not measured contention yet, optimistic locking is usually the safer default."
+    )
+
+
+def _is_database_index_tradeoff_query(lower: str) -> bool:
+    return ("database index" in lower or "db index" in lower or "add an index" in lower) and any(
+        p in lower for p in ("when", "hurt", "performance", "tradeoff", "trade-off", "should i")
+    )
+
+
+def _is_meeting_captions_query(lower: str) -> bool:
+    return (
+        "caption" in lower
+        and any(term in lower for term in ("meeting", "meet", "teams", "zoom", "call", "live"))
+    )
+
+
+def _is_meeting_diagnostics_query(lower: str) -> bool:
+    return any(
+        phrase in lower for phrase in (
+            "meeting diagnostics",
+            "call diagnostics",
+            "meeting status",
+            "call status",
+            "caption diagnostics",
+            "meeting debug",
+            "debug meeting",
+        )
+    )
+
+
+def _is_focus_meeting_query(lower: str) -> bool:
+    return any(
+        phrase in lower for phrase in (
+            "focus the meeting tab",
+            "focus meeting tab",
+            "jump to the meeting tab",
+            "jump to meeting tab",
+            "bring the meeting tab forward",
+            "bring meeting tab forward",
+            "focus the meet tab",
+            "jump to the meet tab",
+            "open the meet tab",
+        )
+    )
+
+
+def _meeting_safe_mode_requested(lower: str) -> str | None:
+    if any(phrase in lower for phrase in (
+        "meeting safe mode on",
+        "turn on meeting safe mode",
+        "enable meeting safe mode",
+        "turn on quiet mode",
+        "enable quiet mode",
+        "turn on call privacy",
+        "enable call privacy",
+    )):
+        return "on"
+    if any(phrase in lower for phrase in (
+        "meeting safe mode off",
+        "turn off meeting safe mode",
+        "disable meeting safe mode",
+        "turn off quiet mode",
+        "disable quiet mode",
+        "turn off call privacy",
+        "disable call privacy",
+    )):
+        return "off"
+    if any(phrase in lower for phrase in (
+        "meeting safe mode",
+        "quiet mode status",
+        "call privacy status",
+        "meeting privacy status",
+    )):
+        return "status"
+    return None
+
+
+def _meeting_diagnostics_reply() -> str:
+    meeting = overlay.detect_meeting_app(force_refresh=True) or "NONE"
+    audio = meeting_listener.status_snapshot()
+    preferred = audio.get("preferred", {})
+    device = audio.get("active_device_name") or preferred.get("device_name") or "unknown"
+    scan_ready = "ready" if shutil.which("screencapture") else "unavailable"
+    privacy = call_privacy.snapshot()
+    parts = [
+        f"Meeting detection: {meeting}.",
+        browser.meeting_diagnostics_text(),
+        f"Audio route: {device}.",
+        f"Meeting-safe mode: {'ON' if privacy.get('enabled') else 'OFF'}.",
+        f"Screen scan: {scan_ready}.",
+    ]
+    return " ".join(parts)
+
+
+def _database_index_tradeoff_reply() -> str:
+    return (
+        "Add the index when the slow path is a read-heavy, selective query you run often enough that better lookup speed materially matters. "
+        "Do not add it just because a query was slow once, because indexes buy read performance by adding write amplification, storage overhead, and maintenance cost on every insert, update, and delete. "
+        "The real tradeoff is read speed versus write cost, so first verify that the bottleneck is actually the query plan rather than joins, fetch volume, or application logic."
+    )
+
+
+def _vault_exact_citation_summary(query: str) -> str:
+    results = vault.search(query, topn=5)
+    if not results:
+        return "I couldn't find a matching local vault result."
+    preferred = next((item for item in results if str(item.get("path", "")).startswith("raw/")), results[0])
+    citation = preferred.get("citation", {})
+    path = citation.get("path", preferred.get("path", "unknown path"))
+    heading = citation.get("heading", preferred.get("title", "unknown heading"))
+    excerpt = " ".join((preferred.get("excerpt", "") or "").split())
+    if excerpt:
+        excerpt = excerpt[:220].rstrip()
+        if not excerpt.endswith("."):
+            excerpt += "."
+    else:
+        excerpt = "This local vault result matched the query."
+    return (
+        f"{excerpt} "
+        f"The exact local file and heading I used were {path} and {heading}."
+    )
+
+
+def _personal_interest_reply() -> str:
+    facts = mem.list_facts()
+    projects = [p for p in mem.get_projects() if p.get("name")]
+    topics = mem.get_top_topics(5)
+
+    role_fact = next((fact for fact in facts if "anthropic" in fact.lower() or "trust" in fact.lower() or "safety" in fact.lower()), "")
+    project_names = [p["name"] for p in projects[:3]]
+    role_clause = role_fact.rstrip(".")
+    if role_clause:
+        if role_clause.lower().startswith("current role is"):
+            role_value = role_clause[len("current role is"):].strip(" :")
+            role_clause = f"You currently work as {role_value}"
+        elif role_clause.lower().startswith("role:"):
+            role_value = role_clause.split(":", 1)[1].strip()
+            role_clause = f"You currently work as {role_value}"
+        elif role_clause.lower().startswith(("i am", "i'm")):
+            role_clause = "You are " + role_clause.split(" ", 1)[1].strip()
+        else:
+            role_clause = f"You are {role_clause}"
+
+    if role_fact and project_names:
+        return (
+            f"What stands out is how tightly your day job and side projects line up. "
+            f"{role_clause} while also building {', '.join(project_names)}, so your work consistently sits at the intersection of AI safety, product behavior, and real system execution."
+        )
+
+    if project_names and topics:
+        return (
+            f"The interesting pattern is how consistent your interests are across both what you build and what you ask about. "
+            f"Your current projects include {', '.join(project_names)}, and your recurring topics are {', '.join(topics[:3])}, which means you keep converging on applied AI systems rather than abstract theory."
+        )
+
+    if role_fact:
+        return (
+            f"The clearest thing I know about you is that {role_clause}. "
+            "That puts you in a rare position where you see how AI policy, misuse risk, and product behavior collide in the real world, not just in theory."
+        )
+
+    if project_names:
+        return (
+            f"What is interesting is that you are not just using AI tools, you are building them. "
+            f"Right now that includes {', '.join(project_names)}, which suggests you care more about useful, working systems than novelty."
+        )
+
+    return (
+        "What stands out is that your questions keep clustering around applied AI safety, real-world system behavior, and practical tooling. "
+        "That usually means you are optimizing for systems that hold up under pressure, not just systems that demo well."
+    )
+
+
+def _interview_profile_reply(user_input: str) -> str:
+    base = interview_profile.answer_for_query(user_input)
+    # Enrich with any relevant semantic KB hits not already covered by the profile
+    smem_ctx = _smem.context_for_query(user_input, top_k=2, max_chars=600)
+    if smem_ctx:
+        return base + "\n\n" + smem_ctx
+    return base
+
+
+def _is_performance_report_query(lower: str) -> bool:
+    return any(
+        phrase in lower for phrase in (
+            "how are you doing",
+            "how am i doing",
+            "how have you been doing",
+            "show me your performance",
+            "show your performance",
+            "self eval report",
+            "self-eval report",
+            "quality report",
+            "response quality",
+            "quality scores",
+            "quality metrics",
+            "your quality score",
+            "eval scores",
+            "eval report",
+            "performance report",
+            "performance metrics",
+            "how are your responses",
+            "how good are your responses",
+            "where are you weakest",
+            "your weakest area",
+            "your weakest domain",
+            "show eval",
+            "show self eval",
+        )
+    )
+
+
+def _performance_report_reply() -> str:
+    try:
+        import self_eval
+        return self_eval.performance_report(hours=24 * 7)
+    except Exception as exc:
+        return f"Self-eval report unavailable: {exc}"
+
+
+def _is_score_command(lower: str) -> bool:
+    """Trigger: /score or explicit rolling-score phrases."""
+    return lower.strip() in ("/score", "score") or any(
+        phrase in lower for phrase in (
+            "/score",
+            "rolling score",
+            "rolling average",
+            "show score",
+            "average score",
+            "last 50",
+            "response score",
+            "self eval score",
+            "self-eval score",
+            "conciseness score",
+            "routing score",
+            "relevance score",
+        )
+    )
+
+
+def _score_command_reply() -> str:
+    try:
+        from harness import self_eval_log
+        return self_eval_log.score_report(n=50)
+    except Exception as exc:
+        return f"/score unavailable: {exc}"
+
+
+def _is_reflect_command(lower: str) -> bool:
+    """Trigger: /reflect or explicit reflection-request phrases."""
+    return lower.strip() in ("/reflect", "reflect") or any(
+        phrase in lower for phrase in (
+            "/reflect",
+            "run reflection",
+            "trigger reflection",
+            "reflection pipeline",
+            "self reflection",
+            "reflect on",
+            "jarvis performance reflection",
+            "run self eval reflection",
+            "update self eval",
+            "generate reflection",
+            "write reflection",
+        )
+    )
+
+
+def _reflect_command_reply() -> str:
+    try:
+        from harness import reflection
+        summary = reflection.reflect_text(hours=168)
+        # Also kick off LLM improvement notes (async — doesn't block response)
+        try:
+            reflection.write_improvement_notes_async(n=50)
+        except Exception:
+            pass
+        return summary
+    except Exception as exc:
+        return f"/reflect unavailable: {exc}"
+
+
+def _is_diagnose_command(lower: str) -> bool:
+    """Trigger: /diagnose or health/failure phrases."""
+    return lower.strip() in ("/diagnose", "diagnose") or any(
+        phrase in lower for phrase in (
+            "/diagnose",
+            "worst interactions",
+            "worst responses",
+            "failing interactions",
+            "lowest scoring",
+            "worst scoring",
+            "what's failing",
+            "what is failing",
+            "show failures",
+            "worst quality",
+            "diagnose quality",
+            "system health",
+            "health check",
+            "jarvis health",
+            "subsystem status",
+            "is ollama running",
+            "is google auth",
+            "check subsystems",
+        )
+    )
+
+
+def _diagnose_command_reply() -> str:
+    try:
+        from harness import diagnose
+        return diagnose.diagnose_text()
+    except Exception as exc:
+        # Fall back to legacy health_check
+        try:
+            from harness import health_check
+            return health_check.health_text(include_score_report=True)
+        except Exception:
+            return f"/diagnose unavailable: {exc}"
+
+
+def _is_optimize_command(lower: str) -> bool:
+    """Trigger: /optimize [apply <id>] — prompt self-optimization."""
+    stripped = lower.strip()
+    return stripped.startswith("/optimize") or stripped.startswith("optimize apply ") or any(
+        phrase in lower for phrase in (
+            "prompt optimization",
+            "optimize prompts",
+            "optimize system prompt",
+            "suggest prompt edits",
+            "prompt suggestions",
+            "improve system prompt",
+        )
+    )
+
+
+def _optimize_command_reply(raw_input: str) -> str:
+    try:
+        from harness import prompt_optimizer
+        lower = raw_input.strip().lower()
+        # Handle: /optimize apply s001
+        apply_m = re.search(r"\bapply\s+(s\d+)\b", lower)
+        if apply_m:
+            return prompt_optimizer.apply_suggestion(apply_m.group(1))
+        return prompt_optimizer.optimize_text(n=200)
+    except Exception as exc:
+        return f"/optimize unavailable: {exc}"
+
+
+def _is_status_command(lower: str) -> bool:
+    """Trigger: /status — autonomous loop status dashboard."""
+    stripped = lower.strip()
+    return stripped in ("/status", "loop status", "status") or any(
+        phrase in lower for phrase in (
+            "/status",
+            "loop status",
+            "orchestrator status",
+            "work queue status",
+            "task queue status",
+            "active sessions status",
+            "show loop status",
+            "show orchestrator",
+            "autonomous loop status",
+        )
+    )
+
+
+def _status_command_reply() -> str:
+    try:
+        from harness import loop_monitor
+        return loop_monitor.status_text()
+    except Exception as exc:
+        return f"/status unavailable: {exc}"
+
+
+def _is_task_command(lower: str) -> bool:
+    """Trigger: /task <description> — run an operative task end-to-end."""
+    stripped = lower.strip()
+    return (
+        stripped == "/task"
+        or stripped.startswith("/task ")
+        or stripped.startswith("/approve-task ")
+    )
+
+
+def _parse_task_approval_command(text: str) -> tuple[str, str] | None:
+    match = re.fullmatch(
+        r"\s*/(?:task\s+(approve|cancel)|(?:approve-task)\s*)\s+([A-Za-z0-9_-]{12,80})\s*",
+        text or "",
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    action = (match.group(1) or "approve").lower()
+    return action, match.group(2)
+
+
+def _is_summarize_command(lower: str) -> bool:
+    """Trigger: /summarize (or /summarise) <text or file path> — local LLM summarization."""
+    stripped = lower.strip()
+    return (
+        stripped in ("/summarize", "/summarise")
+        or stripped.startswith("/summarize ")
+        or stripped.startswith("/summarise ")
+    )
+
+
+# Active task cancellation is scoped to the authenticated route context.
+_ACTIVE_TASK_CANCELS: dict[tuple[str, str, str], threading.Event] = {}
+_ACTIVE_TASK_CANCELS_LOCK = threading.Lock()
+
+
+def _task_context_key(context: RouteContext) -> tuple[str, str, str]:
+    normalized = context.normalized()
+    return normalized.principal, normalized.session_id, normalized.source
+
+
+def _register_task_cancel(context: RouteContext, event: threading.Event) -> bool:
+    key = _task_context_key(context)
+    with _ACTIVE_TASK_CANCELS_LOCK:
+        if key in _ACTIVE_TASK_CANCELS:
+            return False
+        _ACTIVE_TASK_CANCELS[key] = event
+        return True
+
+
+def _clear_task_cancel(context: RouteContext, event: threading.Event) -> None:
+    key = _task_context_key(context)
+    with _ACTIVE_TASK_CANCELS_LOCK:
+        if _ACTIVE_TASK_CANCELS.get(key) is event:
+            _ACTIVE_TASK_CANCELS.pop(key, None)
+
+
+def _task_result_text(result: dict) -> str:
+    if result.get("status") == "approval_required":
+        return str(result.get("summary") or "Approval required.")
+    steps = result.get("steps", [])
+    completed = sum(1 for step in steps if getattr(step, "ok", False))
+    if result.get("ok"):
+        return f"Done ({completed}/{len(steps)} steps)\n\n{result.get('summary', '')}"
+    reason = str(result.get("stop_reason") or "failed").replace("_", " ")
+    return f"Task failed ({reason}; {completed}/{len(steps)} steps). {result.get('summary', '')}"
+
+
+def _run_task_worker_stream(
+    header: str,
+    worker,
+    *,
+    context: RouteContext,
+    thread_name: str,
+):
+    import queue as _q
+    import threading as _th
+    from config import OPERATIVE_TIMEOUT_SECONDS
+
+    progress_q: _q.Queue = _q.Queue()
+    cancel = _th.Event()
+    if not _register_task_cancel(context, cancel):
+        yield "A task is already active for this session."
+        return
+
+    def _progress(step_desc: str, detail: str = "") -> None:
+        progress_q.put(("progress", step_desc, detail))
+
+    def _run() -> None:
+        try:
+            progress_q.put(("done", worker(_progress, cancel)))
+        except Exception as exc:
+            logging.exception("[%s] operative failed", thread_name)
+            progress_q.put(("error", str(exc)))
+
+    worker_thread = _th.Thread(target=_run, daemon=True, name=thread_name)
+    worker_thread.start()
+    deadline = time.monotonic() + OPERATIVE_TIMEOUT_SECONDS
+    try:
+        yield header
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                cancel.set()
+                yield "Task failed (operative timeout)."
+                break
+            try:
+                item = progress_q.get(timeout=min(0.25, remaining))
+            except _q.Empty:
+                continue
+            if item[0] == "progress":
+                _, step_desc, detail = item
+                line = f"• {step_desc}"
+                if detail:
+                    line += f": {detail[:120]}"
+                yield line + "\n"
+                continue
+            if item[0] == "error":
+                yield f"Task failed: {item[1]}"
+            else:
+                yield _task_result_text(item[1])
+            break
+    finally:
+        cancel.set()
+        if worker_thread.is_alive():
+            def _clear_after_worker() -> None:
+                worker_thread.join()
+                _clear_task_cancel(context, cancel)
+
+            _th.Thread(
+                target=_clear_after_worker,
+                daemon=True,
+                name=f"{thread_name}/cleanup",
+            ).start()
+        else:
+            _clear_task_cancel(context, cancel)
+
+
+def _task_command_stream(task: str, *, context: RouteContext | None = None):
+    """Prepare once, then execute only capability-free task plans."""
+    if not task.strip():
+        yield "Usage: /task <natural language description of what to do>"
+        return
+    from operative import execute_prepared_task, prepare_task
+
+    route_context = (context or RouteContext.desktop()).normalized()
+
+    def _worker(on_progress, cancel):
+        prepared = prepare_task(task, context=route_context, cancel_event=cancel)
+        if prepared.get("status") == "approval_required":
+            return prepared
+        return execute_prepared_task(
+            prepared["manifest"],
+            on_progress=on_progress,
+            cancel_event=cancel,
+            context=route_context,
+        )
+
+    yield from _run_task_worker_stream(
+        f"Task: {task}\n\n",
+        _worker,
+        context=route_context,
+        thread_name="TaskCommand",
+    )
+
+
+def _task_approval_stream(
+    approval_id: str,
+    *,
+    context: RouteContext | None = None,
+):
+    """Consume one explicit approval code and stream its bound execution."""
+    from operative import approve_and_run_task
+
+    route_context = (context or RouteContext.desktop()).normalized()
+
+    def _worker(on_progress, cancel):
+        return approve_and_run_task(
+            approval_id,
+            on_progress=on_progress,
+            cancel_event=cancel,
+            context=route_context,
+        )
+
+    yield from _run_task_worker_stream(
+        f"Approving task {approval_id} and verifying its execution manifest.\n",
+        _worker,
+        context=route_context,
+        thread_name="TaskApproval",
+    )
+
+
+def _is_cancel_task_command(lower: str) -> bool:
+    """Trigger: /cancel — stop the active operative task."""
+    stripped = lower.strip()
+    return stripped in ("/cancel", "/cancel task", "cancel task", "stop task", "/stop task")
+
+
+def _cancel_task_reply(context: RouteContext | None = None) -> str:
+    route_context = (context or RouteContext.desktop()).normalized()
+    with _ACTIVE_TASK_CANCELS_LOCK:
+        event = _ACTIVE_TASK_CANCELS.get(_task_context_key(route_context))
+    if event is not None and not event.is_set():
+        event.set()
+        return "Cancelling — task will stop after the current step."
+    if event is not None:
+        return "Task cancellation is already in progress."
+    return "No active task to cancel."
+
+
+# ── /resume command ─────────────────────────────────────────────────────────────
+
+def _is_resume_command(lower: str) -> bool:
+    """Trigger: /resume [run_id] — resume the most-recent interrupted task."""
+    stripped = lower.strip()
+    return stripped.startswith("/resume") or stripped in ("resume task", "resume last task")
+
+
+def _resume_command_stream(
+    user_input: str,
+    *,
+    context: RouteContext | None = None,
+):
+    """Stream progress while resuming an interrupted task."""
+    import task_persistence as _tp
+
+    # Parse optional run_id from input: "/resume run_abc123"
+    parts = user_input.strip().split(None, 1)
+    explicit_run_id = parts[1].strip() if len(parts) > 1 and parts[1].strip().startswith("run_") else ""
+
+    route_context = (context or RouteContext.desktop()).normalized()
+    interrupted = []
+    for task in _tp.find_interrupted_tasks():
+        approval = task.get("execution_approval") or {}
+        if approval:
+            if (
+                approval.get("principal") != route_context.principal
+                or approval.get("session_id") != route_context.session_id
+                or approval.get("source") != route_context.source
+            ):
+                continue
+        elif route_context.source != "desktop":
+            continue
+        interrupted.append(task)
+    if not interrupted:
+        yield "No interrupted tasks found — nothing to resume."
+        return
+
+    if explicit_run_id:
+        target = next((t for t in interrupted if t.get("id") == explicit_run_id), None)
+        if target is None:
+            yield f"No interrupted task with id {explicit_run_id!r}.\n\nInterrupted tasks:\n"
+            for t in interrupted:
+                done = len(t.get("step_events", []))
+                total = t.get("steps_total", "?")
+                yield f"  • {t['id']}  ({done}/{total} steps done)  — {t.get('task', '')[:60]}\n"
+            return
+    else:
+        target = interrupted[0]
+
+    run_id = target["id"]
+    task_desc = target.get("task", run_id)
+    done_count = len(target.get("step_events", []))
+    total = target.get("steps_total", "?")
+
+    def _worker(on_progress, cancel):
+        from operative import resume_task
+
+        return resume_task(
+            run_id,
+            on_progress=on_progress,
+            cancel_event=cancel,
+            context=route_context,
+        )
+
+    yield from _run_task_worker_stream(
+        f"Resuming: **{task_desc[:80]}**\n({done_count}/{total} steps already done)\n\n",
+        _worker,
+        context=route_context,
+        thread_name="Operative/resume",
+    )
+
+
+# ── Git operations ─────────────────────────────────────────────────────────────
+
+def _is_git_status_query(lower: str) -> bool:
+    return bool(re.search(
+        r"\bgit\s+status\b"
+        r"|\bwhat(?:'s|\s+is|\s+are)?\s+(?:modified|changed|staged|unstaged|dirty)\b"
+        r"|\bshow\s+(?:me\s+)?(?:modified|changed|unstaged|staged)\s+files?\b"
+        r"|\bwhat\s+files?\s+(?:did\s+i\s+change|changed|are\s+modified)\b",
+        lower,
+    ))
+
+
+def _is_git_diff_query(lower: str) -> bool:
+    return bool(re.search(
+        r"\bgit\s+diff\b"
+        r"|\bshow\s+(?:me\s+)?(?:the\s+)?diff\b"
+        r"|\bwhat\s+(?:did\s+i\s+change|changed|are\s+(?:my\s+)?changes)\b"
+        r"|\bshow\s+(?:me\s+)?(?:my\s+)?changes?\b"
+        r"|\bdiff\s+(?:my\s+)?(?:changes|code|files?)\b",
+        lower,
+    ))
+
+
+def _is_git_log_query(lower: str) -> bool:
+    return bool(re.search(
+        r"\bgit\s+log\b"
+        r"|\b(?:show|list)\s+(?:recent\s+)?commits?\b"
+        r"|\bcommit\s+history\b"
+        r"|\blast\s+\d+\s+commits?\b"
+        r"|\brecent\s+commits?\b",
+        lower,
+    ))
+
+
+def _parse_git_commit_message(text: str) -> str | None:
+    """Extract commit message from 'commit my changes with message X' etc."""
+    patterns = [
+        r'(?:commit|stage\s+and\s+commit|save\s+and\s+commit).*?(?:with\s+message|message|as|saying)\s+["\']?(.+?)["\']?\s*$',
+        r'(?:commit|save)\s+(?:these|my|all|the)\s+changes?\s+(?:as|with|with\s+message)\s+["\']?(.+?)["\']?\s*$',
+        r'git\s+commit\s+(?:-m\s+)?["\']?(.+?)["\']?\s*$',
+        r'(?:commit|save)\s+(?:this|it)\s+(?:as|with)\s+["\']?(.+?)["\']?\s*$',
+    ]
+    for pat in patterns:
+        m = re.search(pat, text, re.IGNORECASE | re.DOTALL)
+        if m:
+            msg = m.group(1).strip().strip('"\'')
+            if len(msg) >= 5:
+                return msg
+    return None
+
+
+def _is_git_commit_query(lower: str) -> bool:
+    return bool(re.search(
+        r"\bgit\s+commit\b"
+        r"|\bcommit\s+(?:my|these|all|the|this)?\s*(?:changes?|files?|code|work)\b"
+        r"|\bstage\s+and\s+commit\b"
+        r"|\bsave\s+(?:and\s+commit|my\s+changes?\s+(?:as|with))\b",
+        lower,
+    )) and "push" not in lower
+
+
+def _git_status_reply() -> str:
+    from tools.git_ops import git_status
+    return git_status()
+
+
+def _git_diff_reply(lower: str) -> str:
+    from tools.git_ops import git_diff
+    staged = "staged" in lower or "cached" in lower
+    return git_diff(staged=staged)
+
+
+def _git_log_reply(lower: str) -> str:
+    from tools.git_ops import git_log
+    m = re.search(r"\b(\d+)\s+commits?\b", lower)
+    n = int(m.group(1)) if m else 10
+    return git_log(n=min(n, 20))
+
+
+def _git_commit_reply(user_input: str) -> str:
+    from tools.git_ops import git_add_all, git_commit, git_status
+    msg = _parse_git_commit_message(user_input)
+    if not msg:
+        status = git_status()
+        return (
+            f"Current status:\n{status}\n\n"
+            "What commit message should I use? Say: commit my changes with message <your message>"
+        )
+    status_before = git_status()
+    if status_before == "Working tree is clean.":
+        return "Nothing to commit — working tree is already clean."
+    git_add_all()
+    result = git_commit(msg)
+    return result
+
+
+def _is_meta_improvement_query(lower: str) -> bool:
+    return any(
+        phrase in lower for phrase in (
+            "what needs improving",
+            "what do you need to improve",
+            "how can you become more useful",
+            "become more useful to aman",
+            "you are still too generic",
+            "too generic sometimes",
+            "what should you improve",
+            "how would you improve over time",
+            "what would you do to become more useful",
+        )
+    )
+
+
+def _meta_improvement_reply() -> str:
+    summary = evals.summary()
+    failures = summary.get("recent_failures", [])
+    categories = summary.get("categories", {})
+    projects = [p.get("name") for p in mem.get_projects()[:3] if p.get("name")]
+    topics = mem.get_top_topics(3)
+
+    if failures:
+        top_categories = ", ".join(f"{name} ({count})" for name, count in sorted(categories.items(), key=lambda kv: kv[1], reverse=True)[:3])
+        latest = "; ".join(f"{f['category']}: {f['issue']}" for f in failures[-2:])
+        next_steps_map = {
+            "stability": "stabilize the runtime and keep crash evidence in the log so the process does not silently die",
+            "browser": "keep tightening browser execution and page-action parsing",
+            "knowledge": "tighten vault retrieval, citation grounding, and knowledge summarization",
+            "routing": "tighten intent routing and status-query handling",
+            "self_improve": "keep self-improve in evidence-gated explanation mode unless the request is an explicit edit",
+            "formatting": "remove spoken-output artifacts before they reach TTS",
+            "memory": "anchor more answers in stored user context",
+            "tool_execution": "make tool results and fallbacks more reliable",
+        }
+        ordered_categories = [name for name, _ in sorted(categories.items(), key=lambda kv: kv[1], reverse=True)]
+        next_steps = [next_steps_map[name] for name in ordered_categories if name in next_steps_map]
+        next_steps_text = ", and ".join(next_steps[:3]) if next_steps else "fix whichever paths keep failing in the eval log"
+        project_text = f" Your current project context includes {', '.join(projects)}." if projects else ""
+        topic_text = f" The topics you ask about most are {', '.join(topics)}." if topics else ""
+        return (
+            f"The main things I need to improve right now are {top_categories}. "
+            f"My most recent concrete failures were {latest}. "
+            f"So the right next steps are to {next_steps_text}, and then keep following the eval log instead of guessing. "
+            f"To become more useful to Aman, I should anchor more answers in his real context instead of generic advice.{project_text}{topic_text}"
+        )
+
+    project_text = f" Your current projects include {', '.join(projects)}." if projects else ""
+    topic_text = f" The topics you ask about most are {', '.join(topics)}." if topics else ""
+    return (
+        "I don't have enough recent failure evidence yet to claim a specific weakness with confidence. "
+        "The right move is to keep logging weak answers, then improve whichever failure category repeats most instead of making abstract changes."
+        f"{project_text}{topic_text}"
+    )
+
+
+def _fallback_self_review_text(area: str | None = None) -> str:
+    brief = evals.build_improvement_brief(area=area, min_failures=1)
+    if brief.get("ok"):
+        target = brief.get("target_file", "the routing layer")
+        summary = brief.get("summary", "")
+        evidence = brief.get("evidence_lines", [])[:2]
+        evidence_text = " ".join(evidence)
+        return (
+            f"My strongest current shortcomings are coming from recent eval evidence, not from a full self-review pass. "
+            f"{summary} The most likely next target is {target}. "
+            f"The clearest recent signals are {evidence_text}"
+        ).strip()
+
+    summary = evals.summary()
+    categories = summary.get("categories", {})
+    if categories:
+        top = ", ".join(f"{name} ({count})" for name, count in sorted(categories.items(), key=lambda kv: kv[1], reverse=True)[:3])
+        return (
+            f"My self-review module is incomplete right now, so I am falling back to eval evidence. "
+            f"The strongest recent weakness categories are {top}. "
+            "I should tighten those failing paths before attempting broader self-improvement."
+        )
+
+    return (
+        "My self-review module is incomplete right now, and I also do not have enough recent eval evidence to rank my weaknesses confidently. "
+        "The right next move is to log more weak answers and then review the repeated failure paths."
+    )
+
+
+def _self_review_text(area: str | None = None) -> str:
+    try:
+        review_fn = getattr(si, "self_review", None)
+        format_fn = getattr(si, "review_text", None)
+        if callable(review_fn) and callable(format_fn):
+            return format_fn(review_fn(area=area))
+    except Exception as exc:
+        logging.debug("[Router] self_review failed, using fallback: %s", exc)
+    return _fallback_self_review_text(area=area)
+
+
+# ── Pending message state (survives across voice turns) ───────────────────────
+_pending_msg_recipient: str = ""
+_awaiting_msg_recipient: bool = False
+_last_msg_recipient: str = ""
+_last_message_send_result: dict | None = None
+_pending_message_draft: dict | None = None
+_pending_email_draft: dict | None = None
+_pending_email_recipient: dict | None = None
+_pending_email_reply: dict | None = None  # {sender, from_address, subject} set during reply flow
+_fuzzy_contact_suggestions: list[str] = []
+_pending_resolved_address: str = ""  # pre-resolved address set alongside pending recipient
+_last_assistant_reply: str = ""
+_JARVIS_INTRO_SHORT = "Hi, this is Jarvis, Aman's assistant."
+_GOOGLE_REAUTH_MSG = (
+    "Google access needs re-authorization. Run: python3 google_services.py --reauth"
+)
+_JARVIS_INTRO_DETAILED = (
+    "Hi, I’m Jarvis, Aman’s local-first AI assistant. I help him with coding, research, writing, planning, and Mac workflows, "
+    "and I can draft messages or coordinate tasks when Aman explicitly confirms them. I do not act on private systems silently; "
+    "I work through permission-gated tools so Aman stays in control."
+)
+
+# ── Pending self-improvement (approval gate) ──────────────────────────────────
+# Uses a list so inner functions can mutate it without `global` keyword.
+_pending_improvements: list = [None]
+
+
+def _set_pending_recipient(name: str, resolved_address: str = ""):
+    global _pending_msg_recipient, _awaiting_msg_recipient, _last_msg_recipient, _pending_resolved_address
+    _pending_msg_recipient = name.strip()
+    _awaiting_msg_recipient = False
+    _pending_resolved_address = resolved_address.strip() if resolved_address else ""
+    if _pending_msg_recipient:
+        _last_msg_recipient = _pending_msg_recipient
+
+
+def _set_awaiting_recipient():
+    global _awaiting_msg_recipient, _pending_msg_recipient
+    _awaiting_msg_recipient = True
+    _pending_msg_recipient = ""
+
+
+def _clear_pending_recipient():
+    global _pending_msg_recipient, _awaiting_msg_recipient, _pending_resolved_address
+    _pending_msg_recipient = ""
+    _awaiting_msg_recipient = False
+    _pending_resolved_address = ""
+
+
+def _sanitize_message_body(body: str) -> str:
+    cleaned = (body or "").strip().strip("\"'")
+    # Strip edit instructions used while a draft is pending.
+    cleaned = re.sub(
+        r"^(?:instead[, ]+)?(?:make|change|update|edit|replace)\s+"
+        r"(?:it|that|this|the\s+(?:message|draft))\s+"
+        r"(?:(?:to|as)\s+)?(?:say(?:ing)?\s*:?\s*)?",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    # Strip leading "say: " or bare "say " when used as a command prefix
+    cleaned = re.sub(r"^say\s*:\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"^say\s+(?=\S)", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    quoted = re.search(r"\bdraft ready for .+?:\s*\"([^\"]+)\"", cleaned, flags=re.IGNORECASE)
+    if quoted:
+        cleaned = quoted.group(1).strip()
+    cleaned = re.sub(
+        r"\s*say confirm send to send it,?\s+or cancel message to stop\.?\s*$",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
+    return cleaned
+
+
+def _eager_resolve_contact(recipient: str) -> str | None:
+    """Return resolved phone/email for a name recipient if unambiguous, else None."""
+    if re.search(r"[\d@\+]", recipient):
+        return None
+    # Contacts is the source of truth for delivery. Thread history is only a
+    # fallback because old beta tests may have recorded stale numbers.
+    found = msg.lookup_contact(recipient)
+    if found and not found.startswith("__"):
+        return found
+    if found in {msg._AMBIGUOUS_CONTACT, msg._FUZZY_MATCHES, msg._CONTACT_WITHOUT_HANDLE}:
+        return None
+
+    # Fallback for contacts not available in macOS Contacts but present in the
+    # local Jarvis-side thread store.
+    name_lower = recipient.strip().lower()
+    for thread in msg_thread.list_threads():
+        stored_name = (thread.get("contact") or "").strip().lower()
+        if stored_name == name_lower or stored_name.startswith(name_lower + " ") or stored_name.split()[0] == name_lower:
+            addr = thread.get("address", "")
+            if addr and re.search(r"[\d@]", addr):
+                return addr
+    return None
+
+
+def _set_pending_message_draft(recipient: str, body: str, resolved_address: str | None = None):
+    global _pending_message_draft, _last_msg_recipient
+    _pending_message_draft = {
+        "recipient": recipient.strip(),
+        "body": _sanitize_message_body(body),
+    }
+    if resolved_address:
+        _pending_message_draft["resolved_address"] = resolved_address.strip()
+    if recipient.strip():
+        _last_msg_recipient = recipient.strip()
+
+
+def _clear_pending_message_draft():
+    global _pending_message_draft
+    _pending_message_draft = None
+
+
+def _clear_message_state():
+    _clear_pending_message_draft()
+    _clear_pending_recipient()
+    _fuzzy_contact_suggestions.clear()
+
+
+def _has_pending_message_draft() -> bool:
+    return bool(_pending_message_draft and _pending_message_draft.get("recipient") and _pending_message_draft.get("body"))
+
+
+def _sanitize_email_text(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip().strip("\"'"))
+
+
+def _clear_pending_email_draft():
+    global _pending_email_draft, _pending_email_recipient, _pending_email_reply
+    _pending_email_draft = None
+    _pending_email_recipient = None
+    _pending_email_reply = None
+
+
+def _set_pending_email_reply(sender: str, from_address: str, subject: str):
+    global _pending_email_reply
+    _pending_email_reply = {
+        "sender": sender.strip(),
+        "from_address": from_address.strip(),
+        "subject": subject.strip(),
+    }
+
+
+def _has_pending_email_reply() -> bool:
+    return bool(
+        _pending_email_reply
+        and _pending_email_reply.get("from_address")
+    )
+
+
+def _has_pending_email_draft() -> bool:
+    return bool(
+        _pending_email_draft
+        and _pending_email_draft.get("to")
+        and _pending_email_draft.get("body")
+    )
+
+
+def _has_pending_email_recipient() -> bool:
+    return bool(
+        _pending_email_recipient
+        and _pending_email_recipient.get("recipient")
+    )
+
+
+def _extract_email_address(text: str) -> str:
+    match = re.search(r"[\w.\-+%]+@[\w.\-]+\.[A-Za-z]{2,}", text or "")
+    return match.group(0) if match else ""
+
+
+_SELF_EMAIL_ALIASES = frozenset({"aman imran", "aman", "myself", "me", "self", "my email"})
+
+def _resolve_email_recipient(recipient: str) -> tuple[str, str]:
+    """Return (email address, user-facing error)."""
+    recipient = (recipient or "").strip().strip(",;:")
+    direct = _extract_email_address(recipient)
+    if direct:
+        return direct, ""
+    # Self-email shortcut: common when testing or forwarding to yourself
+    if recipient.lower() in _SELF_EMAIL_ALIASES:
+        try:
+            import memory as _mem
+            ctx = _mem.get_context() or ""
+            import re as _re
+            found_email = _re.search(r"[\w.\-+]+@[\w.\-]+\.\w+", ctx)
+            if found_email:
+                return found_email.group(0), ""
+        except Exception:
+            logging.debug("[Router] email-from-memory lookup failed; using contact lookup", exc_info=True)
+    # Email-specific lookup — avoids returning phone numbers for contacts that have both
+    email_found = msg.lookup_contact_email(recipient)
+    if email_found:
+        return email_found, ""
+    found = msg.lookup_contact(recipient)
+    if found and "@" in found:
+        return found, ""
+    if found in {msg._AMBIGUOUS_CONTACT, msg._FUZZY_MATCHES}:
+        options = msg.get_last_contact_options()
+        if options:
+            return "", f"I need the exact email contact. Did you mean: {', '.join(options)}?"
+    return "", f"I need an email address for {recipient}. Use an address like name@example.com."
+
+
+def _set_pending_email_draft(recipient: str, to_address: str, subject: str, body: str):
+    global _pending_email_draft
+    clean_body = _sanitize_email_text(body)
+    clean_subject = _sanitize_email_text(subject)
+    if not clean_subject or clean_subject == "Message from Aman":
+        clean_subject = _infer_email_subject(clean_body)
+    _pending_email_draft = {
+        "recipient": (recipient or to_address).strip(),
+        "to": to_address.strip(),
+        "subject": clean_subject or "Message from Aman",
+        "body": clean_body,
+    }
+
+
+def _set_pending_email_recipient(recipient: str, to_address: str = "", subject: str = "Message from Aman"):
+    global _pending_email_recipient
+    _pending_email_recipient = {
+        "recipient": recipient.strip(),
+        "to": to_address.strip(),
+        "subject": _sanitize_email_text(subject) or "Message from Aman",
+    }
+
+
+def _email_confirmation_prompt() -> str:
+    draft = _pending_email_draft or {}
+    recipient = draft.get("recipient") or draft.get("to") or "recipient"
+    to_address = draft.get("to", "")
+    subject = draft.get("subject", "Message from Aman")
+    body = draft.get("body", "")
+    recipient_display = f"{recipient} ({to_address})" if to_address and to_address != recipient else recipient
+    return (
+        f"Email draft ready for {recipient_display}: subject \"{subject}\". "
+        f"Body: \"{body}\". Say confirm send to send it, or cancel to stop."
+    )
+
+
+def _direct_email_or_empty(recipient: str) -> str:
+    return _extract_email_address(recipient or "")
+
+
+def _infer_email_subject(body: str) -> str:
+    """Generate a short subject from body text when no subject is given."""
+    text = (body or "").strip()
+    if not text:
+        return "Message from Aman"
+    # Strip filler prefixes
+    text = re.sub(r"^(?:just\s+)?(?:wanted\s+to\s+|following\s+up\s+(?:on\s+)?|checking\s+in\s+(?:on\s+)?)", "", text, flags=re.IGNORECASE)
+    # Capitalize first letter and take up to first sentence boundary or 8 words
+    sentence = re.split(r"[.!?,;]", text)[0].strip()
+    words = sentence.split()
+    subject = " ".join(words[:8]).strip().rstrip(".,;:")
+    if not subject:
+        return "Message from Aman"
+    return subject[0].upper() + subject[1:] if len(subject) > 1 else subject.upper()
+
+
+def _parse_email_search_query(text: str) -> str | None:
+    """Extract search query from 'find emails from X', 'search email for X', etc.
+    Returns None if not an email search request."""
+    raw = _strip_polite_prefix(text or "").strip()
+    lower = raw.lower()
+    patterns = [
+        r"^(?:find|search|look up|pull up|show me)\s+(?:my\s+)?emails?\s+(?:from|about|regarding|with subject)\s+(.+)$",
+        r"^(?:search|look)\s+(?:my\s+)?(?:email|inbox|gmail)\s+for\s+(.+)$",
+        r"^(?:any|got any|do i have any)\s+emails?\s+from\s+(.+)$",
+        r"^(?:find|show)\s+(?:emails?|messages?)\s+from\s+(.+)$",
+    ]
+    for pattern in patterns:
+        m = re.match(pattern, lower)
+        if m:
+            return m.group(1).strip().strip("?.,!")
+    return None
+
+
+def _parse_message_read_query(text: str) -> str | None:
+    """Extract a contact name from iMessage inbox-read queries.
+
+    Matches phrases like:
+      "any new messages from Aman"
+      "did Aman reply"
+      "what did Aman say"
+      "read messages from Aman"
+      "check messages from Aman"
+      "has Aman texted"
+      "any texts from Aman"
+
+    Returns the contact name/identifier if matched, else None.
+    """
+    raw = _strip_polite_prefix(text or "").strip()
+    # Strip trailing punctuation before matching so "did Aman reply?" works
+    lower = raw.lower().rstrip("?.,!")
+    patterns = [
+        # "any new messages from X" / "any texts from X" / "any messages from X"
+        r"^(?:any\s+)?(?:new\s+)?(?:messages?|texts?|imessages?)\s+from\s+(.+)$",
+        # "did X reply" / "did X text" / "did X respond"
+        r"^did\s+(.+?)\s+(?:reply|text|respond|message|get back)(?:\s.*)?$",
+        # "what did X say" / "what did X text" / "what did X message"
+        r"^what\s+did\s+(.+?)\s+(?:say|text|message|write|send)(?:\s.*)?$",
+        # "read messages from X" / "read texts from X"
+        r"^read\s+(?:messages?|texts?)\s+from\s+(.+)$",
+        # "check messages from X" / "check texts from X"
+        r"^check\s+(?:messages?|texts?)\s+from\s+(.+)$",
+        # "has X texted" / "has X messaged" / "has X replied"
+        r"^has\s+(.+?)\s+(?:texted|messaged|replied|responded|written)(?:\s.*)?$",
+        # "show messages from X" / "show texts from X"
+        r"^show\s+(?:(?:me\s+)?(?:my\s+)?)?(?:messages?|texts?)\s+from\s+(.+)$",
+    ]
+    for pattern in patterns:
+        m = re.match(pattern, lower)
+        if m:
+            # Preserve original casing by slicing the raw string at the same offset
+            contact_lower = m.group(1).strip().strip("?.,!")
+            # Map back to original-case version
+            idx = lower.find(contact_lower)
+            if idx != -1:
+                return raw[idx: idx + len(contact_lower)].strip("?.,!")
+            return contact_lower
+    return None
+
+
+def _is_meeting_prep_query(lower: str) -> bool:
+    """Return True when the user is asking about their next meeting."""
+    patterns = [
+        r"\bmeeting in \d+\b",
+        r"\bprep (?:me )?for (?:my )?(?:next )?meeting\b",
+        r"\bwhat.s my next meeting\b",
+        r"\bnext meeting\b",
+        r"\bupcoming meeting\b",
+        r"\bmeeting prep\b",
+    ]
+    return any(re.search(p, lower) for p in patterns)
+
+
+def _format_next_event(event: dict) -> str:
+    """Format a get_next_event() dict into a short spoken prep string."""
+    from datetime import datetime
+    title = event.get("title", "Untitled")
+    start_raw = event.get("start", "")
+    attendees = event.get("attendees", [])
+    try:
+        dt = datetime.fromisoformat(start_raw)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone()
+        time_str = dt.strftime("%-I:%M %p")
+    except Exception:
+        time_str = start_raw
+    parts = [f"Your next meeting is {title} at {time_str}."]
+    if attendees:
+        count = len(attendees)
+        names = ", ".join(attendees[:3])
+        if count > 3:
+            names += f", and {count - 3} others"
+        parts.append(f"{count} attendee{'s' if count != 1 else ''}: {names}.")
+    return " ".join(parts)
+
+
+def _parse_email_compose(text: str) -> tuple[str, str, str] | None:
+    raw = _strip_polite_prefix(text or "").strip()
+
+    recipient_prefix = ""
+    match = re.match(
+        r"^(?:send\s+(?:an?\s+)?email\s+to|email|(?:write|draft|compose)\s+(?:an?\s+)?email\s+(?:to|for))\s+(.+)$",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        payload = match.group(1).strip()
+    else:
+        match = re.match(r"^send\s+(.+?)\s+(?:an?\s+)?email\s+(.+)$", raw, flags=re.IGNORECASE)
+        if not match:
+            return None
+        recipient_prefix = match.group(1).strip()
+        payload = f"{recipient_prefix} {match.group(2).strip()}"
+    if not payload:
+        return None
+    if re.search(r"\b(?:inbox|unread|read|check|show|list)\b", payload, flags=re.IGNORECASE):
+        return None
+
+    delimiter = re.search(
+        r"\s+(?:subject|body|message|saying|say)\s*:?\s+",
+        payload,
+        flags=re.IGNORECASE,
+    )
+    if delimiter:
+        recipient = (recipient_prefix or payload[:delimiter.start()]).strip().strip(",;:")
+        remainder = payload[delimiter.start():].strip()
+    elif ":" in payload:
+        recipient, remainder = [part.strip() for part in payload.split(":", 1)]
+    else:
+        return None
+
+    subject = "Message from Aman"
+    body = ""
+    subject_match = re.match(
+        r"subject\s*:?\s*(.+?)\s+(?:body|message|saying|say)\s*:?\s+(.+)$",
+        remainder,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if subject_match:
+        subject = subject_match.group(1)
+        body = subject_match.group(2)
+    else:
+        body_match = re.match(
+            r"(?:body|message|saying|say)\s*:?\s+(.+)$",
+            remainder,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        body = body_match.group(1) if body_match else remainder
+
+    recipient = recipient.strip()
+    subject = _sanitize_email_text(subject)
+    body = _sanitize_email_text(body)
+    if not recipient or not body:
+        return None
+    if not subject or subject == "Message from Aman":
+        subject = _infer_email_subject(body)
+    return recipient, subject or "Message from Aman", body
+
+
+def _parse_email_recipient_only(text: str) -> str:
+    raw = _strip_polite_prefix(text or "").strip()
+    if not raw:
+        return ""
+    if re.search(r"\b(?:inbox|unread|read|check|show|list|summary|digest|overview|recap|gist|tldr)\b", raw, flags=re.IGNORECASE):
+        return ""
+    patterns = (
+        r"^(?:send\s+(?:an?\s+)?email\s+to|email|(?:write|draft|compose)\s+(?:an?\s+)?email\s+(?:to|for))\s+(.+)$",
+        r"^send\s+(.+?)\s+(?:an?\s+)?email\s*$",
+    )
+    for pattern in patterns:
+        match = re.match(pattern, raw, flags=re.IGNORECASE)
+        if not match:
+            continue
+        candidate = _normalize_contact_phrase(match.group(1))
+        candidate = re.split(
+            r"\s+(?:subject|body|message|saying|say|that|with)\b",
+            candidate,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0].strip()
+        return candidate if (candidate and (_extract_email_address(candidate) or _looks_like_contact_name(candidate))) else ""
+    return ""
+
+
+def _is_email_reply_query(lower: str) -> bool:
+    """Detect intent to reply to an existing email."""
+    return bool(re.search(
+        r"\b(?:reply|respond|write back|answer)\b.{0,30}\b(?:email|mail|message)\b"
+        r"|\b(?:reply|respond|write back|answer)\b\s+(?:to\s+)?(?:that|their|his|her|the)\b",
+        lower,
+        re.IGNORECASE,
+    ))
+
+
+def _find_email_to_reply(name_hint: str) -> tuple[str, str, str] | None:
+    """Look up unread emails and return (sender_name, from_address, re_subject) for best match.
+
+    name_hint may be empty — falls back to most recent email.
+    """
+    try:
+        emails = gs.get_unread_email_subjects(max_results=10)
+    except Exception:
+        return None
+    if not emails:
+        return None
+    if name_hint:
+        hint_lower = name_hint.lower()
+        for e in emails:
+            if hint_lower in e.get("sender", "").lower() or hint_lower in e.get("from_address", "").lower():
+                return e["sender"], e.get("from_address", ""), f"Re: {e['subject']}"
+    # fallback: most recent
+    e = emails[0]
+    return e["sender"], e.get("from_address", ""), f"Re: {e['subject']}"
+
+
+def _is_email_digest_query(lower: str) -> bool:
+    """Detect "what are my emails about today" / digest intent."""
+    return bool(re.search(
+        r"\b(?:emails?|mail|inbox)\b.{0,40}\b(?:about|summary|digest|overview|gist|tldr|tl;dr|today)\b"
+        r"|\b(?:what(?:'s| is| are)?)\b.{0,20}\b(?:emails?|mail|inbox)\b.{0,30}\b(?:about|say|contain|today)\b"
+        r"|\bemail\s+(?:digest|summary|overview|recap)\b"
+        r"|\bwhat(?:'s| is)\s+in\s+my\s+(?:email|inbox|mail)\b"
+        r"|\bany\s+(?:important|urgent|new|unread)?\s*emails?\b"
+        r"|\bsummariz[e]?\s+(?:my\s+)?(?:inbox|emails?|mail)\b",
+        lower,
+        re.IGNORECASE,
+    ))
+
+
+def _build_email_digest(emails: list[dict]) -> str:
+    """Build a 3-bullet local summary of inbox emails — no LLM required."""
+    if not emails:
+        return "Your inbox is clear — no unread emails."
+
+    urgent_keywords = re.compile(
+        r"\b(?:urgent|asap|immediately|action required|fyi|deadline|today|respond|critical|alert|overdue)\b",
+        re.IGNORECASE,
+    )
+    urgent   = [e for e in emails if urgent_keywords.search(e.get("subject","") + " " + e.get("snippet",""))]
+    senders  = list(dict.fromkeys(e.get("sender","Unknown") for e in emails))
+    count    = len(emails)
+
+    # Bullet 1: volume + senders
+    if count == 1:
+        b1 = f"1 unread email from {senders[0]}."
+    elif len(senders) <= 3:
+        b1 = f"{count} unread emails from {', '.join(senders[:3])}."
+    else:
+        b1 = f"{count} unread emails from {', '.join(senders[:2])} and {len(senders)-2} others."
+
+    # Bullet 2: urgency
+    if urgent:
+        urg_subjects = ", ".join(f'"{e["subject"][:50]}"' for e in urgent[:2])
+        b2 = f"{len(urgent)} flagged urgent: {urg_subjects}."
+    else:
+        b2 = "Nothing flagged urgent."
+
+    # Bullet 3: top subjects
+    subjects = [e.get("subject","")[:60] for e in emails[:2] if e.get("subject")]
+    if subjects:
+        b3 = "Top threads: " + " / ".join(f'"{s}"' for s in subjects) + "."
+    else:
+        b3 = "No subject lines available."
+
+    return f"• {b1}\n• {b2}\n• {b3}"
+
+
+def _is_email_cancel_query(lower: str) -> bool:
+    text = _strip_polite_prefix(lower or "").strip()
+    if text in {"cancel", "abort", "nevermind", "never mind", "stop", "discard", "nvm", "no", "nope"}:
+        return True
+    if text in {"cancel email", "cancel the email", "cancel draft", "cancel the draft", "discard email"}:
+        return True
+    return bool(
+        re.match(
+            r"^(?:(?:don't|do not)\s+send\s+(?:the\s+)?email|forget\s+it|ignore\s+it|don't\s+bother)\b",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _is_contact_selection(lower: str) -> str | None:
+    """Return the matched suggestion name if the user's input matches one of the
+    current fuzzy contact suggestions (case-insensitive substring match), else None."""
+    stripped = (lower or "").strip()
+    number_match = re.fullmatch(r"(?:option\s*)?(\d+)", stripped)
+    if number_match:
+        index = int(number_match.group(1)) - 1
+        if 0 <= index < len(_fuzzy_contact_suggestions):
+            return _fuzzy_contact_suggestions[index]
+    for name in _fuzzy_contact_suggestions:
+        if stripped == name.lower():
+            return name
+    if msg.resolve_last_contact_selection(stripped):
+        for name in _fuzzy_contact_suggestions:
+            if stripped == name.lower():
+                return name
+    for name in _fuzzy_contact_suggestions:
+        if name.lower() in stripped or stripped in name.lower():
+            return name
+    return None
+
+
+def _message_contact_options() -> list[str]:
+    options = msg.get_last_contact_options()
+    return options or list(_fuzzy_contact_suggestions)
+
+
+def _set_message_contact_resolution(options: list[str]):
+    global _awaiting_msg_recipient
+    _fuzzy_contact_suggestions.clear()
+    _fuzzy_contact_suggestions.extend(options)
+    _awaiting_msg_recipient = True
+
+
+def _message_contact_resolution_prompt() -> str:
+    options = _message_contact_options()
+    if not options:
+        return "I need the exact contact name. You can say the full name, phone number, or email."
+    numbered = "; ".join(f"{idx + 1}. {option}" for idx, option in enumerate(options))
+    return f"Reply with option 1, option 2, or the exact contact label: {numbered}."
+
+
+def _message_confirmation_prompt(recipient: str, body: str) -> str:
+    body = _sanitize_message_body(body)
+    resolved = (_pending_message_draft or {}).get("resolved_address", "")
+    recipient_display = f"{recipient} ({resolved})" if resolved and resolved != recipient else recipient
+    return (
+        f"Draft ready for {recipient_display}: \"{body}\". "
+        f"Say confirm send to send it, or cancel message to stop."
+    )
+
+
+def _unsafe_message_body_reason(body: str) -> str:
+    lower = (body or "").lower()
+    unsafe_markers = (
+        "admin/sudo",
+        "sudo privileges",
+        "administrator privileges",
+        "run any terminal command",
+        "run any shell command",
+        "direct access to aman's mac",
+        "direct access to the mac",
+        "full macos system control",
+        "unrestricted system control",
+        "incoming imessage monitoring",
+        "monitor incoming imessage",
+        "monitor incoming messages",
+        "read your messages",
+        "read incoming messages",
+        "read imessages",
+        "read messages via the messages app",
+        "self-learning: extracts knowledge from every conversation automatically",
+        "background knowledge feed: stays current",
+    )
+    if any(marker in lower for marker in unsafe_markers):
+        return "That draft overclaims Jarvis capabilities, so I will not send it as written."
+    return ""
+
+
+def _safe_forwardable_message_text(text: str) -> str:
+    if not text or _unsafe_message_body_reason(text):
+        return _JARVIS_INTRO_DETAILED
+    return _sanitize_message_body(text)
+
+
+def _unsafe_message_draft_reply(body: str, *, keep_current: bool = False) -> str:
+    reason = _unsafe_message_body_reason(body)
+    if not reason:
+        return ""
+    suffix = (
+        "I kept the current draft unchanged. Say cancel message to stop, or give me a safer replacement."
+        if keep_current
+        else "I have not drafted it. Give me a safer replacement, or say cancel message to stop."
+    )
+    return f"{reason} {suffix}"
+
+
+def _is_intro_detail_request(lower: str) -> bool:
+    text = re.sub(r"[^a-z0-9]+", " ", lower or "").strip()
+    return (
+        "introduction" in text
+        and any(term in text for term in ("more", "deeper", "detailed", "detail", "indepth", "in depth", "indebt"))
+    ) or bool(re.search(r"\b(?:more|deeper|detailed|indepth|indebt)\s+(?:jarvis\s+)?intro(?:duction)?\b", text))
+
+
+def _parse_send_last_response_request(text: str) -> str:
+    raw = _strip_message_modifiers(_strip_polite_prefix(text or "")).strip()
+    match = re.match(
+        r"^(?:send|text|message)\s+(?:the\s+)?last\s+(?:response|reply|answer|message)\s+to\s+(.+)$",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return ""
+    recipient = _clean_relationship_recipient(match.group(1))
+    return recipient if recipient and _looks_like_contact_name(recipient) else ""
+
+
+def _is_message_confirm_query(lower: str) -> bool:
+    # Bare confirmations are only safe to accept when _has_pending_message_draft()
+    # is already True — callers must enforce that guard.
+    bare_confirm = lower.strip() in {"confirm", "yes", "yep", "yup", "ok", "okay", "sure", "do it", "send"}
+    if bare_confirm:
+        return True
+    return any(
+        phrase in lower for phrase in (
+            "confirm send",
+            "send it",
+            "yes send",
+            "send now",
+            "go ahead and send",
+            "approve send",
+        )
+    )
+
+
+def _is_message_cancel_query(lower: str) -> bool:
+    # Bare single-word cancels — safe because callers guard on pending message state.
+    _bare = _strip_polite_prefix(lower).strip()
+    if _bare in {"cancel", "abort", "nevermind", "stop", "discard", "nvm"}:
+        return True
+    return bool(
+        re.match(
+            r"^(?:cancel\s+(?:the\s+)?(?:message|send|draft|it)|don't\s+send|do\s+not\s+send|never\s+mind|stop\s+(?:the\s+)?message|forget\s+it|ignore\s+it|don't\s+bother)\b",
+            _bare,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _extract_contact_name(text: str) -> str:
+    cleaned = (text or "").strip().strip("\"'").strip(" .!?")
+    cleaned = re.sub(r"^(?:contact\s*name|name|recipient|contact)\s*:\s*", "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"^(?:contact|recipient)\s*:\s*", "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"^(?:to\s+)?(?:contact\s+)?", "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"^(?:now\s+)?(?:this|that|the)\s+(?:phone\s+)?number\s+", "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"^(?:phone\s+)?number\s+", "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"^(?:send|message|text|say)\s+(?:to\s+)?", "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned
+
+
+_RELATIONSHIP_CONTACTS = {
+    "dad", "father", "mom", "mother", "mama", "pops",
+    "bro", "brother", "sis", "sister", "wife", "husband",
+    "son", "daughter", "grandma", "grandpa", "parent", "parents",
+}
+
+
+def _normalize_contact_phrase(text: str) -> str:
+    candidate = _extract_contact_name(text)
+    candidate = re.sub(
+        r"^(?:my|our)\s+(?=(" + "|".join(re.escape(term) for term in sorted(_RELATIONSHIP_CONTACTS)) + r")\b)",
+        "",
+        candidate,
+        flags=re.IGNORECASE,
+    ).strip()
+    return candidate
+
+
+def _parse_message_recipient_correction(text: str) -> str:
+    raw = (text or "").strip()
+    patterns = (
+        r"^(?:no[, ]+)?(?:his|her|their|my)\s+name(?:\s+in\s+contacts)?\s+is\s*:?\s*(.+)$",
+        r"^(?:no[, ]+)?(?:the\s+)?contact(?:\s+name)?\s+is\s*:?\s*(.+)$",
+        r"^(?:no[, ]+)?send\s+(?:it|that)\s+to\s+(.+?)\s+instead$",
+        r"^(?:no[, ]+)?use\s+(.+?)\s+instead$",
+        r"^(?:no[, ]+)?actually\s+(.+)$",
+    )
+    for pattern in patterns:
+        match = re.match(pattern, raw, flags=re.IGNORECASE)
+        if not match:
+            continue
+        candidate = _normalize_contact_phrase(match.group(1))
+        if candidate and _looks_like_contact_name(candidate):
+            return candidate
+    return ""
+
+
+def _looks_like_message_rephrase(lower: str) -> bool:
+    text = (lower or "").strip()
+    compact = re.sub(r"[^a-z]+", " ", text).strip()
+    return any(
+        phrase in text for phrase in (
+            "that's not what i want",
+            "thats not what i want",
+            "that's wrong",
+            "thats wrong",
+            "wrong person",
+            "wrong contact",
+            "wrong message",
+            "redo that",
+            "start over",
+            "try again",
+        )
+    ) or text in {"no", "nope"} or bool(re.fullmatch(r"(?:omg+\s+)?no+", compact))
+
+
+def _parse_message_replacement_compose(text: str) -> tuple[str, str] | None:
+    raw = (text or "").strip()
+    patterns = (
+        r"^(?:no[, ]+)?(?:that(?:'s| is)|thats)\s+not\s+what\s+i\s+want[, ]+(.+)$",
+        r"^(?:no[, ]+)?(?:wrong\s+(?:person|contact|message)|redo that|start over|try again)[, ]+(.+)$",
+        r"^(?:no[, ]+)?actually\s+(.+)$",
+    )
+    for pattern in patterns:
+        match = re.match(pattern, raw, flags=re.IGNORECASE)
+        if not match:
+            continue
+        parsed = _parse_message_compose(match.group(1).strip())
+        if parsed:
+            return parsed
+    return None
+
+
+def _clean_relationship_recipient(raw: str) -> str:
+    candidate = (raw or "").strip().strip(",;:.")
+    candidate = re.sub(
+        r"\b(?:through|via|over|on|in|using)\s+(?:texts?|text\s+messages?|messages?|imessage|i\s*message|sms)\b.*$",
+        "",
+        candidate,
+        flags=re.IGNORECASE,
+    ).strip()
+    candidate = re.sub(r"\s+(?:is|as|aka)\s+my\s+(?:dad|father|mom|mother|parent|brother|sister)\b.*$", "", candidate, flags=re.IGNORECASE).strip()
+    candidate = re.sub(r"\b(?:aka|also known as)\s+(?:dad|father|mom|mother|parent|brother|sister)\b.*$", "", candidate, flags=re.IGNORECASE).strip()
+    candidate = re.sub(r"^(?:my\s+)?(?:contact\s+)", "", candidate, flags=re.IGNORECASE).strip()
+    candidate = re.sub(r"^(?:my\s+)?(?:dad|father|mom|mother|parent|brother|sister)\s+(?=[A-Z0-9])", "", candidate, flags=re.IGNORECASE).strip()
+    return _normalize_contact_phrase(candidate)
+
+
+def _parse_indirect_message_request(text: str) -> tuple[str, str] | None:
+    """Handle intent-first phrasing like: introduce yourself to Fiza through texts."""
+    raw = _strip_message_modifiers(_strip_polite_prefix(text or ""))
+    raw = re.sub(r"^(?:now\s+)?(?:jarvis[, ]+)?", "", raw, flags=re.IGNORECASE).strip()
+    raw = re.sub(r"\s+(?:text\s+)?message$", "", raw, flags=re.IGNORECASE).strip()
+    declared_relationship = re.match(
+        r"^(?:introduce\s+(?:yourself(?:\s+(?:jarvis|jarvia))?|(?:jarvis|jarvia)(?:\s+yourself)?))\s*,\s*"
+        r"(.+?)\s+is\s+my\s+(?:dad|father|mom|mother|parent|brother|sister)\b.*$",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if declared_relationship:
+        recipient = _clean_relationship_recipient(declared_relationship.group(1))
+        if recipient and _looks_like_contact_name(recipient):
+            return recipient, _JARVIS_INTRO_SHORT
+    patterns = (
+        (
+            r"^(?:introduce\s+(?:yourself(?:\s+(?:jarvis|jarvia))?|(?:jarvis|jarvia)(?:\s+yourself)?|me))\s+(?:to\s+)?(.+?)(?:\s+(?:through|via|over|on|in|using)\s+(?:texts?|text\s+messages?|messages?|imessage|i\s*message|sms)\b|$|,)",
+            _JARVIS_INTRO_SHORT,
+        ),
+        (
+            r"^(?:say\s+hi|say\s+hello)\s+to\s+(.+?)(?:\s+(?:through|via|over|on|in)\s+(?:texts?|messages?|imessage|i\s*message|sms)\b|$|,)",
+            "Hi.",
+        ),
+    )
+    for pattern, body in patterns:
+        match = re.match(pattern, raw, flags=re.IGNORECASE)
+        if not match:
+            continue
+        recipient = _clean_relationship_recipient(match.group(1))
+        if recipient and _looks_like_contact_name(recipient):
+            return recipient, body
+    return None
+
+
+def _looks_like_message_status_query(lower: str) -> bool:
+    text = _strip_polite_prefix(lower or "").strip().strip(" .!?")
+    if text in {
+        "message status",
+        "messages status",
+        "text status",
+        "draft status",
+        "send status",
+        "status of message",
+        "status of the message",
+        "status of draft",
+        "status of the draft",
+    }:
+        return True
+    return any(
+        phrase in lower for phrase in (
+            "did you message",
+            "did you send",
+            "was it sent",
+            "have you sent",
+            "who did you send it to",
+            "who did you send that to",
+            "who are you sending it to",
+            "who are you sending that to",
+            "who is this going to",
+            "who is it going to",
+            "where did you send it",
+            "what did you send",
+            "what message did you send",
+        )
+    )
+
+
+def _is_generic_message_request(text: str) -> bool:
+    cleaned = _strip_polite_prefix(text)
+    lower = cleaned.lower().strip().strip("?.!")
+    return bool(
+        lower in {
+            "message",
+            "text",
+            "send a message",
+            "send message",
+            "send a text",
+            "send text",
+            "send a text message",
+            "send text message",
+        }
+        or re.match(
+            r"^(?:help me\s+)?send\s+(?:a\s+)?(?:text\s+)?message\s+(?:for me|for us|for someone)$",
+            lower,
+        )
+        or re.match(
+            r"^(?:help me\s+)?(?:text|message)\s+(?:someone|somebody)$",
+            lower,
+        )
+    )
+
+
+def _last_message_status_text() -> str:
+    if _has_pending_message_draft():
+        recipient = (_pending_message_draft or {}).get("recipient", "the recipient")
+        body = (_pending_message_draft or {}).get("body", "")
+        return f"Not yet. I have a draft ready for {recipient}: \"{body}\". Say confirm send to send it, or cancel message to stop."
+    if _pending_msg_recipient:
+        return f"Not yet. I still need the exact message content for {_pending_msg_recipient}."
+    if _awaiting_msg_recipient or _fuzzy_contact_suggestions:
+        return "Not yet. I still need the recipient before I can draft or send anything."
+    if _last_message_send_result:
+        recipient = _last_message_send_result.get("recipient", "the recipient")
+        body = _last_message_send_result.get("body", "")
+        return f"The last confirmed send was to {recipient}: \"{body}\"."
+    return "I have not sent a message in this session."
+
+
+def _parse_message_compose(text: str) -> tuple[str, str] | None:
+    # Strip wake/polite prefixes first, then channel/scope modifiers
+    text = _strip_polite_prefix(text)
+    cleaned_text = _strip_message_modifiers(text.strip())
+    prefix_match = re.match(
+        r"^(?:message|text)\s+(.+)$|^(?:send (?:an?\s+)?(?:text\s+message|message|text|imessage|i\s*message) to|send to)\s+(.+)$",
+        cleaned_text,
+        flags=re.IGNORECASE,
+    )
+    payload = next((group for group in prefix_match.groups() if group), "") if prefix_match else ""
+    if payload.lower().startswith("to "):
+        payload = payload[3:].strip()
+
+    # Handle "send X a message [and] BODY" — not caught by prefix_match because
+    # the recipient comes before "a message", not after "send ... to".
+    # e.g. "send mom a message and introduce yourself in Urdu"
+    #   → recipient="mom", body="introduce yourself in Urdu"
+    if not payload:
+        send_name_msg = re.match(
+            r"^send\s+(?:my\s+)?([A-Za-z0-9@\.]+(?:\s+[A-Za-z0-9@\.]+){0,2})\s+a\s+(?:text\s+)?message(?:\s+and\s+|\s+)(.+)$",
+            cleaned_text,
+            flags=re.IGNORECASE,
+        )
+        if send_name_msg:
+            _snm_recipient = _normalize_contact_phrase(send_name_msg.group(1).strip().strip(",;:"))
+            _snm_body = send_name_msg.group(2).strip().strip("\"'")
+            if _snm_recipient and _snm_body and _looks_like_contact_name(_snm_recipient):
+                return _snm_recipient, _snm_body
+
+    intro_name = re.match(
+        r"^(?:my\s+)?(?:dad|father|mom|mother|parent|brother|sister)\s*,?\s+"
+        r"(?:his|her|their)\s+name\s+is\s+(.+?)"
+        r"(?:\s+in\s+(?:my\s+)?contacts?)?"
+        r"(?:\s+and\s+(?:then\s+)?(?:introduce\s+(?:yourself|jarvis)|say\s+hi|say\s+hello).*)?$",
+        payload,
+        flags=re.IGNORECASE,
+    ) if payload else None
+    if intro_name:
+        recipient = _clean_relationship_recipient(intro_name.group(1))
+        if recipient and _looks_like_contact_name(recipient):
+            return recipient, _JARVIS_INTRO_SHORT
+
+    intro_payload = re.match(
+        r"^(.+?)\s+(?:and\s+)?(?:introduce|introducing)\s+"
+        r"(?:yourself|(?:jarvis|jarvia))(?:\s+(?:yourself|jarvis|jarvia))*\s*$",
+        payload,
+        flags=re.IGNORECASE,
+    ) if payload else None
+    if intro_payload:
+        recipient = _clean_relationship_recipient(intro_payload.group(1))
+        if recipient and _looks_like_contact_name(recipient):
+            return recipient, _JARVIS_INTRO_SHORT
+
+    common_body_second_words = {
+        "hi", "hello", "hey", "yo", "thanks", "thank", "ok", "okay", "yes", "no",
+        "milk", "get", "bring", "buy", "pick", "remind", "ask", "tell", "introduce",
+    }
+    contact_only_payload = payload.strip().rstrip(" .!?") if payload else ""
+    if contact_only_payload and re.fullmatch(r"[A-Za-z0-9@\.]+(?:\s+[A-Za-z0-9@\.]+)", contact_only_payload):
+        tokens = contact_only_payload.split()
+        if (
+            all(token[:1].isupper() for token in tokens if re.search(r"[A-Za-z]", token))
+            or tokens[1].lower() not in common_body_second_words
+        ):
+            return None
+
+    # Standard patterns: only allow single-word recipients to avoid ambiguity
+    message_patterns = [
+        r"^(?:message|text)\s+([A-Za-z0-9@\.]+)\s+(.+)$",
+        r"^(?:send (?:a )?(?:text\s+message|message|text) to|send to)\s+([A-Za-z0-9@\.]+)\s+(.+)$",
+    ]
+    _SENTENCE_WORDS = {"someone", "anyone", "nobody", "everybody", "who", "that", "this", "the", "a", "an", "my", "your"}
+
+    # Body-leading delimiter words that are spoken naturally without a comma:
+    # "...dad telling him happy birthday" → body should be "happy birthday".
+    # "...Sarah that the package arrived" → body should be "the package arrived".
+    # "...dad to get chocolate milk" → body should be "get chocolate milk".
+    _BODY_LEADIN = re.compile(
+        r"^(?:but\s+ask\s+(?:him|her|them)(?:\s+to)?|and\s+ask\s+(?:him|her|them)(?:\s+to)?|ask\s+(?:him|her|them)(?:\s+to)?|and\s+tell\s+(?:him|her|them)(?:\s+to)?|tell\s+(?:him|her|them)(?:\s+to)?|and\s+remind\s+(?:him|her|them)\s+to|remind\s+(?:him|her|them)\s+to|and\s+|telling\s+(?:him|her|them)|saying|that|to)\s*:?\s+",
+        flags=re.IGNORECASE,
+    )
+
+    _SPOKEN_BODY_DELIMITER = re.compile(
+        # "to" alone is too ambiguous (matches "I wanted to come") —
+        # only treat "to" as a delimiter when followed by a clear infinitive verb.
+        r"\s+(but\s+ask\s+(?:him|her|them)|ask\s+(?:him|her|them)|and\s+(?:ask|tell|introduce|say|send|let|check|see|find|remind|text|message)|telling(?:\s+(?:him|her|them))?|saying|that|to\s+(?:say|tell|ask|check|call|make|get|give|let|go|see|find|do|pick|drop|buy|send|bring|meet|talk|text|wish|invite|remind|tell))\s+",
+        flags=re.IGNORECASE,
+    )
+
+    _TRAILING_CONJUNCTIONS = ("to say", "to tell", "to ask", "saying", "telling", "but", "and", "that")
+
+    def _clean_recipient(raw_recipient: str) -> str:
+        candidate = (raw_recipient or "").strip().strip(",;:")
+        # Strip trailing conjunction words that can bleed into the recipient
+        # when the body is introduced without a comma, e.g. "Zubaida but I'm late".
+        lower_cand = candidate.lower()
+        for conj in sorted(_TRAILING_CONJUNCTIONS, key=len, reverse=True):
+            if lower_cand.endswith(" " + conj):
+                candidate = candidate[: -(len(conj) + 1)].rstrip()
+                break
+        return _normalize_contact_phrase(candidate)
+
+    def _clean_body(raw_body: str) -> str:
+        body = (raw_body or "").strip().strip("\"'")
+        if re.fullmatch(
+            r"(?:and\s+)?(?:introduce|introducing)\s+(?:yourself|(?:jarvis|jarvia))(?:\s+(?:yourself|jarvis|jarvia))*",
+            body,
+            flags=re.IGNORECASE,
+        ):
+            return _JARVIS_INTRO_SHORT
+        body = re.sub(
+            r",?\s+in\s+(?:a\s+)?(?:text|message|imessage|i\s*message|sms)\s+to\s+.+$",
+            "",
+            body,
+            flags=re.IGNORECASE,
+        ).strip()
+        body = re.sub(
+            r",?\s+(?:through|via|using|on|over)\s+(?:the\s+)?(?:messages\s+app|messages|imessage|i\s*message|sms|text)\s+to\s+.+$",
+            "",
+            body,
+            flags=re.IGNORECASE,
+        ).strip()
+        body = _BODY_LEADIN.sub("", body, count=1).strip()
+        body = re.sub(
+            r"^(?:and\s+)?(?:introduce\s+yourself|introduce|say|tell|ask|text|message)\s+",
+            "",
+            body,
+            flags=re.IGNORECASE,
+        ).strip()
+        # If stripping "ask" leaves an indirect-speech fragment ("if he is X",
+        # "whether she can Y"), the body is not a real message — fall through
+        # to the orchestrator so it can compose a proper direct question.
+        if re.match(r"^(?:if|whether)\s+", body, flags=re.IGNORECASE):
+            return ""
+        if body.endswith("?") and not re.match(r"^(?:who|what|where|when|why|how|which|can|could|would|is|are|do|does|did|should)\b", body, flags=re.IGNORECASE):
+            body = body[:-1].rstrip()
+        return body
+
+    if payload:
+        explicit_delimiter = re.match(
+            r"^(.+?)\s*(?:(?:,\s*(?:to|saying|telling(?:\s+(?:him|her|them))?|that))|(?:\s+(?:to|saying|telling(?:\s+(?:him|her|them))?|that)\s*:)|:)\s+(.+)$",
+            payload,
+            flags=re.IGNORECASE,
+        )
+        if explicit_delimiter:
+            recipient = _clean_recipient(explicit_delimiter.group(1))
+            body = _clean_body(explicit_delimiter.group(2))
+            if recipient and body and _looks_like_contact_name(recipient):
+                return recipient, body
+
+        delimiter = _SPOKEN_BODY_DELIMITER.search(payload)
+        if delimiter:
+            recipient = _clean_recipient(payload[:delimiter.start()])
+            body = _clean_body(payload[delimiter.start():])
+            if recipient and body and _looks_like_contact_name(recipient):
+                return recipient, body
+
+    # Explicit spoken lead-ins without a comma, including multi-word contacts.
+    # "to" as a delimiter is restricted to "to <infinitive_verb>" so "I wanted to come"
+    # doesn't mistakenly split the recipient from the body.
+    match = re.match(
+        r"^(?:(?:message|text)\s+|(?:send (?:a )?(?:text\s+message|message|text) to|send to)\s+)"
+        r"([A-Za-z0-9@\.]+(?:\s+[A-Za-z0-9@\.]+){0,2})\s+"
+        r"(telling(?:\s+(?:him|her|them))?|saying|that|to\s+(?:say|tell|ask|check|call|make|get|give|let|go|see|find|do|pick|drop|buy|send|bring|meet|talk|text|wish|invite|remind))\s+(.+)$",
+        cleaned_text,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        recipient = _clean_recipient(match.group(1))
+        leadin = match.group(2).strip()
+        body = _clean_body(f"{leadin} {match.group(3).strip()}")
+        if recipient and any(tok.lower() in _SENTENCE_WORDS for tok in recipient.split()):
+            return None
+        if recipient and _looks_like_contact_name(recipient) and body:
+            return recipient, body
+
+    # Conservative fallback for plain two-word names without an explicit
+    # spoken delimiter, e.g. "message Aman Imran Hello". We intentionally cap
+    # this at two words so opening body words like "What's" or "Hello" do not
+    # get swallowed into the recipient.
+    if payload:
+        parts = [part for part in payload.split() if part]
+        max_name_parts = min(2, len(parts) - 1)
+        for name_parts in range(max_name_parts, 1, -1):
+            recipient_tokens = parts[:name_parts]
+            if not (
+                all(token[:1].isupper() for token in recipient_tokens if re.search(r"[A-Za-z]", token))
+                or (
+                    len(recipient_tokens) == 2
+                    and recipient_tokens[0][:1].isupper()
+                    and recipient_tokens[1].lower() not in common_body_second_words
+                )
+            ):
+                continue
+            recipient = _clean_recipient(" ".join(recipient_tokens))
+            body = _clean_body(" ".join(parts[name_parts:]))
+            if recipient and body and _looks_like_contact_name(recipient):
+                return recipient, body
+
+    # Try standard patterns first
+    for pattern in message_patterns:
+        match = re.match(pattern, cleaned_text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        recipient = _clean_recipient(match.group(1))
+        body = _clean_body(match.group(2))
+        # Reject recipients that are common English words, not names
+        if recipient and any(tok.lower() in _SENTENCE_WORDS for tok in recipient.split()):
+            continue
+        if recipient and _looks_like_contact_name(recipient) and body:
+            return recipient, body
+
+    # If standard patterns don't match, try body-delimiter patterns.
+    # These handle: ", to get milk", ", saying I'll be late", ": meeting moved", etc.
+    # These allow up to 2-word recipients when delimited by comma or colon
+    body_delimiter_pattern = r"^(?:(?:message|text)\s+|(?:send (?:a )?(?:message|text) to|send to)\s+)([A-Za-z0-9@\.]+(?:\s+[A-Za-z0-9@\.]+){0,1})\s*\b(?:,\s*(?:to|saying|telling(?:\s+(?:him|her|them))?|that)|:)\s+(.+)$"
+    match = re.match(body_delimiter_pattern, cleaned_text, flags=re.IGNORECASE)
+    if match:
+        recipient = _clean_recipient(match.group(1))
+        body = _clean_body(match.group(2))
+        # Reject recipients that are common English words or contain blocked modifiers
+        if recipient and any(tok.lower() in _SENTENCE_WORDS for tok in recipient.split()):
+            return None
+        if recipient and _looks_like_contact_name(recipient) and body:
+            return recipient, body
+
+    return None
+
+
+def _looks_like_non_recipient_command(lower: str) -> bool:
+    return any(
+        phrase in lower for phrase in (
+            "access my contacts list",
+            "open my contacts",
+            "show my contacts",
+            "list my contacts",
+            "read my contacts",
+            "what are my contacts",
+        )
+    )
+
+
+# Conservative email shape used to gate _looks_like_contact_name -- deliberately
+# excludes quotes/spaces/parens/"&" so a crafted string like `x@" & (do shell
+# script "...") & "` is rejected instead of being treated as a bare contact
+# address downstream (see messages.py send_imessage).
+_CONTACT_EMAIL_SHAPE_RE = re.compile(r"^[\w.\-+%]+@[\w.\-]+\.[A-Za-z]{2,}$")
+
+
+def _looks_like_contact_name(name: str) -> bool:
+    cleaned = (name or "").strip()
+    if not cleaned:
+        return False
+    if len(cleaned) > 64:
+        return False
+    if "@" in cleaned:
+        return bool(_CONTACT_EMAIL_SHAPE_RE.match(cleaned))
+    if re.search(r"[0-9]", cleaned):
+        letters = [tok.lower() for tok in re.findall(r"[A-Za-z]+", cleaned)]
+        filler = {"this", "that", "the", "number", "phone", "mobile", "cell", "at"}
+        return all(tok in filler for tok in letters)
+    tokens = [tok for tok in re.split(r"\s+", cleaned) if tok]
+    if not tokens or len(tokens) > 4:
+        return False
+    blocked = {"access", "contacts", "list", "open", "show", "read", "help", "message", "text", "send", "in", "from", "using", "via", "on", "over", "through", "saying", "telling", "that"}
+    if any(tok.lower() in blocked for tok in tokens):
+        return False
+    return True
+
+
+def _normalize_message_recipient(text: str) -> str:
+    candidate = _normalize_contact_phrase(text)
+    phone_match = re.search(r"(\+?\d[\d\-\(\)\s]{6,}\d)", candidate)
+    if phone_match:
+        phone = re.sub(r"[\s\-\(\)]", "", phone_match.group(1))
+        prefix = candidate[:phone_match.start()].strip()
+        suffix = candidate[phone_match.end():].strip()
+        filler = {"this", "that", "the", "number", "phone", "mobile", "cell", "at"}
+        around = " ".join(part for part in (prefix, suffix) if part).strip()
+        if not around or all(tok.lower() in filler for tok in re.findall(r"[A-Za-z]+", around)):
+            return phone
+    return candidate
+
+
+def _parse_message_recipient_only(text: str) -> str:
+    raw = _strip_message_modifiers(_strip_polite_prefix(text or "")).strip()
+    lower = raw.lower()
+    if _looks_like_non_recipient_command(lower):
+        return ""
+    if lower.strip(" .!?") in {"send it", "send that", "send now", "yes send", "confirm send", "go ahead and send"}:
+        return ""
+    if re.match(r"^(?:send\s+(?:it|that)\s+to\s+.+\s+instead|use\s+.+\s+instead)$", raw, flags=re.IGNORECASE):
+        return ""
+
+    labeled = re.search(r"\b(?:contact\s*name|recipient|name)\s*:\s*(.+)$", raw, flags=re.IGNORECASE)
+    if labeled:
+        candidate = _normalize_contact_phrase(labeled.group(1))
+        return candidate if _looks_like_contact_name(candidate) else ""
+
+    m = re.search(
+        r"\b(?:send|message|text)(?:\s+(?:a\s+)?(?:text\s+message|message|text))?\s+to\s+(.+)$",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if m:
+        candidate = _normalize_contact_phrase(m.group(1))
+        candidate = re.split(r"\s+(?:saying|says|that)\s+", candidate, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+        return candidate if _looks_like_contact_name(candidate) else ""
+
+    m = re.match(r"^(?:message|text)\s+(.+)$", raw, flags=re.IGNORECASE)
+    if m:
+        candidate = _clean_relationship_recipient(m.group(1))
+        return candidate if _looks_like_contact_name(candidate) else ""
+
+    number_phrase = re.search(
+        r"\b(?:send|message|text)\b.*?\b(?:this|that|the)?\s*(?:phone\s+)?number\b[:\s-]*(\+?\d[\d\-\(\)\s]{6,}\d)\b",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if number_phrase:
+        candidate = _normalize_message_recipient(number_phrase.group(1))
+        return candidate if _looks_like_contact_name(candidate) else ""
+
+    candidate = _normalize_message_recipient(raw)
+    return candidate if _looks_like_contact_name(candidate) else ""
+
+
+def _parse_contact_details_query(text: str) -> str:
+    raw = (text or "").strip()
+    patterns = (
+        r"^(?:show|check|list)\s+(?:the\s+)?(?:contact\s+)?(?:details|info|handles|numbers|phone numbers)\s+(?:for|on)\s+(.+)$",
+        r"^(?:what(?:'s| is)\s+)(?:the\s+)?(?:contact\s+)?(?:details|info|handles|numbers|phone numbers)\s+(?:for|on)\s+(.+)$",
+        r"^(?:what(?:'s| is)\s+)(.+?)'?s\s+(?:number|numbers|phone number|phone numbers|contact info|contact details)$",
+    )
+    for pattern in patterns:
+        match = re.match(pattern, raw, flags=re.IGNORECASE)
+        if not match:
+            continue
+        candidate = _normalize_contact_phrase(match.group(1))
+        return candidate if _looks_like_contact_name(candidate) else ""
+    return ""
+
+
+# ── Multi-intent helpers ──────────────────────────────────────────────────────
+
+_TOOL_HINT_PATTERNS = [
+    ("time",     r"\b(clock|what time|current time|what'?s the time|is the time|time now|time is it)\b"),
+    ("weather",  r"\b(weather|forecast|temperature|hot|cold outside)\b"),
+    ("calendar", r"\b(calendar|schedule|events?|meetings?|what do i have today|appointments?)\b"),
+    ("email",    r"\b(email|inbox|unread|emails?)\b"),
+]
+
+_SEARCH_TRIGGERS = (
+    "search the web for",
+    "search web for",
+    "web search for",
+    "search the internet for",
+    "search internet for",
+    "search online for",
+    "search google for",
+    "look on github for",
+    "look through github for",
+    "search for",
+    "look up",
+    "google ",
+)
+
+
+def _tool_hint(text: str) -> str | None:
+    t = (text or "").lower()
+    for hint, pattern in _TOOL_HINT_PATTERNS:
+        if re.search(pattern, t):
+            return hint
+    return None
+
+
+def _dispatch_single_intent(query: str) -> str | None:
+    """Directly dispatch a single-tool query without going through the full router."""
+    from datetime import datetime
+    hint = _tool_hint(query)
+    if hint == "time":
+        return f"It's {datetime.now().strftime('%-I:%M %p')}."
+    if hint == "weather":
+        try:
+            return tools.get_weather(_extract_weather_location(query))
+        except Exception as exc:
+            logging.warning("[Router] Weather fetch failed: %s", exc)
+            return "Weather is unavailable right now."
+    if hint == "calendar":
+        try:
+            return gs.get_todays_events()
+        except Exception as exc:
+            logging.warning("[Router] Calendar fetch failed: %s", exc)
+            return _GOOGLE_REAUTH_MSG
+    if hint == "email" and _is_email_digest_query(query):
+        try:
+            import jarvis_agents as _ja
+            return _ja.email_digest()
+        except Exception as exc:
+            logging.warning("[Router] Email digest failed: %s", exc)
+            return _GOOGLE_REAUTH_MSG
+    if hint == "email" and _looks_like_email_read_query(query):
+        try:
+            return gs.get_unread_emails(max_results=3)
+        except Exception as exc:
+            logging.warning("[Router] Email read failed: %s", exc)
+            return _GOOGLE_REAUTH_MSG
+    return None
+
+
+def _is_current_activity_query(lower: str) -> bool:
+    """Detect questions about Jarvis's current runtime activity.
+
+    These must be grounded in runtime state, not answered by the LLM from
+    episodic memory, because memory can mention prior message tests.
+    """
+    text = (lower or "").strip()
+    if not text:
+        return False
+    return bool(re.search(
+        r"\b(?:what\s+are\s+you\s+doing|what\s+were\s+you\s+doing|"
+        r"what\s+are\s+you\s+working\s+on|what\s+were\s+you\s+working\s+on|"
+        r"who\s+(?:are|were)\s+you\s+(?:talking|speaking)\s+(?:to|with)|"
+        r"what\s+(?:are|were)\s+you\s+(?:talking|speaking)\s+about|"
+        r"are\s+you\s+(?:talking|speaking)\s+(?:to|with)\s+.+|"
+        r"how\s+exactly\s+(?:are|were)\s+you\s+(?:talking|speaking))\b",
+        text,
+        re.IGNORECASE,
+    ))
+
+
+def _current_activity_reply(lower: str) -> str:
+    """Return a truthful status answer for current-activity questions."""
+    try:
+        snap = meeting_listener.status_snapshot()
+    except Exception as exc:
+        logging.warning("[Router] meeting_listener.status_snapshot failed: %s", exc)
+        snap = {}
+
+    running = bool(snap.get("running"))
+    degraded = bool(snap.get("degraded_reasons") or snap.get("last_error"))
+    last_transcript = str(snap.get("last_transcript") or "").strip()
+    last_suggestion = str(snap.get("last_suggestion") or "").strip()
+    source = (
+        snap.get("active_source_name")
+        or (snap.get("preferred_source") or {}).get("device_name")
+        or (snap.get("preferred") or {}).get("device_name")
+        or "unknown audio source"
+    )
+
+    talking_query = bool(re.search(r"\b(?:talking|speaking)\b", lower or "", re.IGNORECASE))
+    if talking_query:
+        if running:
+            if degraded:
+                return (
+                    f"I'm not talking to anyone. Smart Listen is running on {source}, "
+                    "but it is degraded, so I should not treat that audio as a real conversation."
+                    + (f" Last transcript fragment: \"{last_transcript[:180]}\"." if last_transcript else "")
+                )
+            return (
+                f"I'm not personally talking to anyone. Smart Listen is monitoring {source} for call assistance."
+                + (f" Last transcript fragment: \"{last_transcript[:180]}\"." if last_transcript else "")
+            )
+        return "I'm not talking to anyone right now. I only send or reply to Messages after you explicitly confirm."
+
+    if running:
+        status = f"I'm responding to your current request. Smart Listen is also active on {source}"
+        if degraded:
+            status += " but degraded"
+        if last_suggestion:
+            status += f"; latest suggestion: \"{last_suggestion[:160]}\""
+        return status + "."
+    return "I'm responding to your current request. No external conversation or background action is active."
+
+
+def _looks_like_email_read_query(query: str) -> bool:
+    lower = (query or "").lower()
+    # "inbox" or "unread" alone is unambiguous; "read/check/show/list" require an email noun co-present
+    if re.search(r"\b(?:inbox|unread)\b", lower):
+        return True
+    if re.search(r"\b(?:read|check|show|list)\b", lower) and re.search(r"\b(?:emails?|mail)\b", lower):
+        return True
+    # "what emails do I have", "any emails", "got any mail", etc.
+    if re.search(r"\b(?:what|any|got|have|do i have|got any)\b.*\b(?:emails?|mail)\b", lower):
+        return True
+    if re.search(r"\b(?:emails?|mail)\b.*\b(?:have|got|today|new|latest|recent)\b", lower):
+        return True
+    return False
+
+
+def _extract_weather_location(query: str) -> str:
+    text = (query or "").strip()
+    if not text:
+        return ""
+
+    patterns = (
+        r"\b(?:weather|forecast|temperature)\s+(?:today\s+|right\s+now\s+|currently\s+)?(?:in|for|at)\s+(.+)$",
+        r"\b(?:weather|forecast)\s+(.+)$",
+        r"\b(?:hot|cold)\s+(?:outside\s+)?(?:in|for|at)\s+(.+)$",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        location = match.group(1).strip(" .?!,")
+        location = re.sub(
+            r"\b(?:today|tonight|tomorrow|right now|currently|current|please)$",
+            "",
+            location,
+            flags=re.IGNORECASE,
+        ).strip(" .?!,")
+        if location and location.lower() not in {"today", "tonight", "tomorrow", "outside", "right now"}:
+            return location
+    return ""
+
+
+def _extract_search_query(query: str) -> str:
+    text = (query or "").strip()
+    lower_text = text.lower()
+    if not any(lower_text.startswith(p) or (" " + p) in lower_text for p in _SEARCH_TRIGGERS):
+        return ""
+    return re.sub(
+        r"(?:search(?:\s+(?:the\s+)?(?:web|internet|online))?\s+for|web\s+search\s+for|search\s+google\s+for|look\s+(?:on|through)\s+github\s+for|look\s+up|google)\s+",
+        "",
+        text,
+        count=1,
+        flags=re.IGNORECASE,
+    ).strip()
+
+
+def _looks_like_standalone_question(lower: str) -> bool:
+    text = (lower or "").strip()
+    if not text:
+        return False
+    if text.endswith("?"):
+        return True
+    return bool(re.match(r"^(?:what|who|where|when|why|how|which)\b", text))
+
+
+def _is_incoming_message_relay(text: str) -> re.Match | None:
+    """Detect explicit relays of incoming messages without stealing prose."""
+    stripped = (text or "").strip()
+    match = re.match(
+        r"^(.+?)\s+(?:replied|texted|messaged|wrote|responded)\s*[:,-]\s+(.+)$",
+        stripped,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        return match
+    return re.match(
+        r"^(.+?)\s+said\s+(?:to\s+reply|to\s+text\s+back|to\s+message\s+back)\s*[:,-]?\s+(.+)$",
+        stripped,
+        flags=re.IGNORECASE,
+    )
+
+
+def _parse_reply_to_contact(text: str) -> str:
+    match = re.match(
+        r"^(?:reply\s+to|respond\s+to|write\s+back\s+to)\s+(.+?)(?:'s\s+message|'s\s+text)?$",
+        (text or "").strip(),
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return ""
+    contact = match.group(1).strip()
+    return contact if _looks_like_contact_name(contact) else ""
+
+
+def _parse_reply_compose(text: str) -> tuple[str, str] | None:
+    raw = _strip_message_modifiers(_strip_polite_prefix(text or "")).strip()
+    match = re.match(
+        r"^(?:reply|respond|write\s+back)\s+(?:to\s+)?(.+?)\s+"
+        r"(?:saying|with|that|tell(?:ing)?(?:\s+(?:him|her|them))?|ask(?:ing)?(?:\s+(?:him|her|them))?)\s+(.+)$",
+        raw,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return None
+    recipient = _clean_relationship_recipient(match.group(1))
+    body = _sanitize_message_body(match.group(2))
+    if recipient and body and _looks_like_contact_name(recipient):
+        return recipient, body
+    return None
+
+
+def _parse_bare_pending_contact_switch(text: str) -> str:
+    raw = _strip_message_modifiers(_strip_polite_prefix(text or "")).strip().strip(" .!?")
+    if not raw:
+        return ""
+    lower = raw.lower()
+    if lower in {
+        "cancel", "abort", "stop", "discard", "nvm", "nevermind", "never mind",
+        "confirm", "send", "yes", "yeah", "yep", "yup", "no", "nope",
+        "ok", "okay", "sure", "do it", "wrong contact", "wrong person",
+    }:
+        return ""
+    if _looks_like_standalone_question(lower) or re.search(
+        r"\b(?:say|saying|tell|telling|ask|asking|bring|get|buy|pick|remind|introduce|hello|hi|hey|thanks)\b",
+        lower,
+    ):
+        return ""
+    candidate = _clean_relationship_recipient(raw)
+    tokens = [tok for tok in re.split(r"\s+", candidate) if tok]
+    if not candidate or not _looks_like_contact_name(candidate):
+        return ""
+    if lower in _RELATIONSHIP_CONTACTS:
+        return candidate
+    if len(tokens) >= 2:
+        return candidate
+    return ""
+
+
+def _reply_to_thread_response(contact: str) -> str:
+    history = msg_thread.format_thread_for_prompt(contact, last_n=6)
+    resolved = _eager_resolve_contact(contact)
+    if history:
+        # Try to generate a contextual LLM draft based on the thread
+        last_msgs = msg_thread.get_thread(contact, last_n=6)
+        last_incoming = next(
+            (m["body"] for m in reversed(last_msgs) if m.get("direction") == "in"),
+            None,
+        )
+        if last_incoming and _should_try_llm_reply_suggestion(last_incoming):
+            suggested = _llm_suggest_reply(contact, last_incoming)
+            if suggested:
+                _set_pending_message_draft(contact, suggested, resolved_address=resolved)
+                masked = msg._mask_contact_handle(resolved) if resolved and hasattr(msg, "_mask_contact_handle") else (resolved or "")
+                addr_note = f" ({masked})" if masked else ""
+                return (
+                    f"Your conversation with {contact}:\n{history}\n\n"
+                    f"Suggested reply to {contact}{addr_note}: \"{suggested}\". "
+                    f"Say confirm send, edit it, or tell me what to say instead."
+                )
+        _set_pending_recipient(contact, resolved_address=resolved or "")
+        return (
+            f"Here's your conversation with {contact}:\n{history}\n\n"
+            f"What would you like to say back?"
+        )
+    _set_pending_recipient(contact, resolved_address=resolved or "")
+    return f"No prior conversation recorded with {contact}. What would you like to say?"
+
+
+def _start_local_beta_background(*, suite: str = "all", build_training_pack: bool = False) -> str:
+    label = "engineering beta" if suite == "engineering" else "local beta"
+    try:
+        local_beta._ensure_dirs()
+    except Exception as exc:
+        logging.warning("[Router] local_beta._ensure_dirs failed: %s", exc)
+
+    def _run():
+        try:
+            local_beta.run_beta_suite(suite=suite, build_training_pack=build_training_pack)
+        except Exception as exc:
+            try:
+                evals.log_failure(
+                    issue=f"{label} background run failed: {exc}",
+                    expected="Background beta suite should complete and write a run artifact.",
+                    user_input=f"run {label}",
+                    response=str(exc),
+                    model="Local Model",
+                    source="local_beta_background",
+                )
+            except Exception:
+                logging.debug("[Router] teacher-capture of local beta failure could not be recorded", exc_info=True)
+
+    threading.Thread(target=_run, daemon=False, name=f"jarvis-{label.replace(' ', '-')}-runner").start()
+    training_note = " and training pack" if build_training_pack else ""
+    return (
+        f"Started the {label}{training_note} run in the background. "
+        "Say local model status to check the latest beta results."
+    )
+
+
+def _llm_suggest_reply(contact: str, incoming_body: str) -> str:
+    """Use the fast local model to suggest a contextual reply based on thread history."""
+    try:
+        history = msg_thread.format_thread_for_prompt(contact, last_n=6)
+        context_block = f"Conversation history:\n{history}\n\n" if history else ""
+        prompt = (
+            f"{context_block}"
+            f"{contact} just said: \"{incoming_body}\"\n\n"
+            f"Write a short, casual, natural reply from Aman. "
+            f"Match the tone of the conversation. "
+            f"Under 20 words. No quotes, no preamble — just the reply text."
+        )
+        result = format_with_mini(prompt, extra_system="You draft short casual text message replies. Return only the reply text, nothing else.")
+        if hasattr(result, "__iter__") and not isinstance(result, str):
+            result = "".join(result)
+        reply = (result or "").strip().strip('"').strip("'")
+        # Reject replies that are too long, empty, or look like a refusal
+        if not reply or len(reply) > 200 or any(w in reply.lower() for w in ("i cannot", "i can't", "as an ai", "i'm unable")):
+            return ""
+        return reply
+    except Exception:
+        return ""
+
+
+def _should_try_llm_reply_suggestion(incoming_body: str) -> bool:
+    words = re.findall(r"\b[\w']+\b", incoming_body or "")
+    return len(words) >= 4 and len((incoming_body or "").strip()) >= 18
+
+
+def _suggest_reply_from_context(contact: str, incoming: str) -> str | None:
+    """Generate a short suggested reply using thread context. Returns None if unavailable."""
+    try:
+        thread = msg_thread.get_thread(contact, last_n=5)
+        if not thread:
+            return None
+        history = "\n".join(
+            f"{'Aman' if m.get('direction') == 'out' else contact}: {m['body']}"
+            for m in thread[-4:]
+        )
+        from brains.brain_ollama import ask_local
+        result_holder: list[str] = []
+
+        def _run():
+            try:
+                r = ask_local(
+                    f"Conversation:\n{history}\n\n{contact}: {incoming}\n\nSuggest a short casual reply from Aman:",
+                    model="jarvis-local",
+                    system_extra="You are helping Aman draft a text message reply. Keep it casual and brief (1-2 sentences max). No quotes. Just the reply text."
+                )
+                result_holder.append(r.strip())
+            except Exception:
+                logging.debug("[Router] local reply-draft suggestion failed", exc_info=True)
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        t.join(timeout=8.0)
+        return result_holder[0] if result_holder else None
+    except Exception:
+        return None
+
+
+def _draft_reply_from_relay_body(body: str) -> str:
+    """Draft only when the relay contains an explicit reply instruction."""
+    text = (body or "").strip()
+    parts = [part.strip() for part in re.split(r"[;\n]+", text) if part.strip()]
+    for part in parts:
+        match = re.match(
+            r"^(?:please\s+)?ask\s+(?:me|him|her|them)\s+(?:if|whether)\s+(.+)$",
+            part,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            question = match.group(1).strip().rstrip(".!?")
+            if question:
+                question = re.sub(r"^(?:i\s+|i'm\s+|i am\s+)", "", question, flags=re.IGNORECASE)
+                return f"Do you {question}?"
+        match = re.match(
+            r"^(?:please\s+)?(?:tell|say\s+to|reply\s+to)\s+(?:me|him|her|them)\s+(?:that\s+)?(.+)$",
+            part,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            reply = match.group(1).strip().strip("\"'")
+            if reply:
+                return reply[0].upper() + reply[1:] if len(reply) > 1 else reply.upper()
+        match = re.match(
+            r"^(?:reply|respond|text|message)\s+(?:back\s+)?(?:with|saying|that)\s+(.+)$",
+            part,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            reply = match.group(1).strip().strip("\"'")
+            if reply:
+                return reply
+    return ""
+
+
+_INTERRUPT_BRIEFING_TRIGGERS = (
+    "brief me", "briefing", "morning brief", "morning update",
+    "what's my status", "what is my status", "give me an update",
+    "status update", "rundown", "what do i have today",
+    "what's going on", "give me a rundown", "rundown please",
+)
+
+def _is_task_list_query(lower: str) -> bool:
+    """Detect read-only task list queries ('what are my tasks', 'show task list').
+
+    Must NOT match action-oriented task phrases like 'queue background vault task',
+    'submit task', 'run task', 'create task'.
+    """
+    # Bail out on action words that aren't reads
+    if re.search(r"\b(?:queue|submit|run|create|add|assign|complete|finish|done|start)\b.*\btask\b", lower, re.IGNORECASE):
+        return False
+    return bool(re.search(
+        r"\b(?:what(?:'s| is| are)?)\b.{0,20}\b(?:tasks?|todos?|to.?do(?:s|es)?)\b"
+        r"|\b(?:show|list|check|get)\b.{0,15}\b(?:my\s+)?(?:tasks?|todos?|to.?do\s+list)\b"
+        r"|\b(?:any\s+)?(?:open\s+)?tasks?(?:\s+(?:for\s+)?(?:today|this\s+week|left))?\b"
+        r"|\btask\s+list\b|\bmy\s+todos?\b"
+        r"|\bwhat\s+(?:do\s+)?(?:i|i've|i\s+have\s+)?(?:got\s+)?to\s+do\b",
+        lower,
+        re.IGNORECASE,
+    ))
+
+
+_CATCHUP_TRIGGERS = {
+    "what did i miss", "catch me up", "fill me in", "what happened",
+    "anything urgent", "anything i missed", "what's new", "whats new",
+    "any updates", "quick update", "status check", "anything while i was away",
+    "what did i miss today",
+}
+
+
+def _is_catchup_query(lower: str) -> bool:
+    return lower.strip() in _CATCHUP_TRIGGERS or any(t in lower for t in _CATCHUP_TRIGGERS)
+
+_APP_LAUNCH_AMBIGUOUS = {
+    "calendar", "email", "mail", "gmail", "notifications", "settings", "preferences",
+    "system preferences", "system settings", "contacts", "photos", "messages",
+    "app store", "the app store", "facetime", "maps", "notes", "reminders",
+    "my email", "my calendar", "my contacts",
+}
+
+_MESSAGES_HISTORY_ACCESS_TRIGGERS = (
+    "messages full disk access",
+    "imessage full disk access",
+    "messages history access",
+    "imessage history access",
+    "messages history permission",
+    "imessage history permission",
+    "can you read my imessage history",
+    "can you read my messages history",
+)
+
+
+def _is_messages_history_access_query(lower: str) -> bool:
+    return any(trigger in lower for trigger in _MESSAGES_HISTORY_ACCESS_TRIGGERS)
+
+
+def _pending_draft_interrupt_route(user_input: str, lower: str) -> tuple | None:
+    """Route obvious standalone commands without overwriting a pending message draft."""
+    # Meeting fast-paths must be checked before _dispatch_single_intent because the
+    # calendar hint in _tool_hint matches "meeting" and would steal these queries.
+    if _is_meeting_captions_query(lower):
+        if any(term in lower for term in ("read", "show", "what are", "display", "copy")):
+            return _s(browser.read_meeting_captions()), "Browser"
+        return _s(browser.summarize_meeting_captions(user_input)), "Browser"
+    if _is_meeting_diagnostics_query(lower):
+        return _s(_meeting_diagnostics_reply()), "Meeting"
+    if _is_focus_meeting_query(lower):
+        return _s(browser.focus_meeting_tab()), "Browser"
+    meeting_safe = _meeting_safe_mode_requested(lower)
+    if meeting_safe == "on":
+        call_privacy.set_enabled(True)
+        return _s(call_privacy.status_text()), "Meeting"
+    if meeting_safe == "off":
+        call_privacy.set_enabled(False)
+        return _s(call_privacy.status_text()), "Meeting"
+    if meeting_safe == "status":
+        return _s(call_privacy.status_text()), "Meeting"
+    fast = _dispatch_single_intent(user_input)
+    if fast is not None:
+        return _s(fast), "Status"
+    # Vault capture always escapes draft context
+    _early_cap_prefixes = ("note this", "remember this:", "save to notes:", "vault this")
+    if any(lower.startswith(p) or lower == p.rstrip(":") for p in _early_cap_prefixes):
+        _ecap = vault_capture.handle_capture(user_input)
+        if _ecap is not None:
+            return _s(_ecap), "Vault"
+    # Night/morning/greeting triggers always escape draft context
+    _all_greeting = {
+        "good morning", "morning", "morning jarvis", "good morning jarvis",
+        "mornin", "mornin jarvis", "good afternoon", "afternoon", "afternoon jarvis",
+        "good afternoon jarvis", "good evening", "evening jarvis", "good evening jarvis",
+    }
+    _all_night = {"good night", "good night jarvis", "night jarvis", "goodnight jarvis"}
+    if lower in _all_night:
+        return _s("Good night. Systems standing by — I'll be here when you need me."), "Chat"
+    if lower in _all_greeting:
+        def _greeting_brief_gen_i():
+            from briefing import _greeting
+            from datetime import datetime
+            greeting = _greeting(datetime.now())
+            brief = _jagents.run_briefing()
+            yield f"{greeting}\n\n{brief}"
+        return _greeting_brief_gen_i(), "Jarvis"
+    # Calendar reminders always escape draft context
+    _reminder_interrupt_prefixes = (
+        "remind me to", "remind me at", "set a reminder", "set reminder",
+        "schedule ", "add a meeting", "add a reminder",
+        "create a calendar event", "create a meeting", "book a meeting", "book a call",
+    )
+    if any(lower.startswith(p) or p in lower for p in _reminder_interrupt_prefixes):
+        _ri_parsed = _parse_calendar_reminder(lower)
+        if _ri_parsed:
+            _ri_title, _ri_dt = _ri_parsed
+            def _ri_cal_gen(title=_ri_title, dt=_ri_dt):
+                try:
+                    result = gs.create_event(title, dt)
+                    yield result
+                except Exception:
+                    try:
+                        yield _schedule_osascript_alarm(title, dt)
+                    except Exception as e2:
+                        yield f"Couldn't set the reminder: {e2}"
+            return _ri_cal_gen(), "Calendar"
+    # App launch always escapes draft context
+    if re.match(r"^(?:open|launch|start)\b", lower):
+        _app_candidate = _parse_app(user_input) or ""
+        if _app_candidate and _app_candidate.lower() not in _APP_LAUNCH_AMBIGUOUS:
+            return _s(tools.open_app(_app_candidate)), "App"
+    if any(t in lower for t in _INTERRUPT_BRIEFING_TRIGGERS):
+        def _briefing_gen():
+            yield _jagents.run_briefing()
+        return _briefing_gen(), "Jarvis"
+    search_query = _extract_search_query(user_input)
+    if search_query:
+        return _s(_ws.search(search_query)), "Search"
+    if _is_timer_request(lower):
+        parsed = _parse_timer(lower)
+        if parsed:
+            seconds, label = parsed
+            if _on_timer_done:
+                tools.set_timer(seconds, label, _on_timer_done)
+            return _s(f"Timer set for {label}."), "Timer"
+    if _is_messages_history_access_query(lower):
+        return _s(msg.messages_history_permission_text()), "Messages"
+    if _looks_like_standalone_question(lower):
+        return smart_stream(user_input)
+    return None
+
+
+_MAX_MEM0_REPLY_CHARS = 900
+
+
+def _mem0_turn_text(user_input: str, assistant_reply: str) -> str:
+    """Compact tool-heavy turns before writing them to episodic memory."""
+    user = user_input.strip()
+    reply = assistant_reply.strip()
+    search_query = _extract_search_query(user)
+    if search_query:
+        return f"User searched the web for: {search_query}"
+    if len(reply) > _MAX_MEM0_REPLY_CHARS:
+        reply = reply[:_MAX_MEM0_REPLY_CHARS].rstrip() + "..."
+    return f"User: {user}\nJarvis: {reply}"
+
+
+def _detect_multi_intent(lower: str) -> list[str] | None:
+    """Return [part_a, part_b] if the query combines two distinct tool categories."""
+    parts = re.split(r"\band\b", lower, maxsplit=1)
+    if len(parts) != 2:
+        return None
+    a, b = parts[0].strip(), parts[1].strip()
+    if not a or not b or len(a) < 3 or len(b) < 3:
+        return None
+    hint_a, hint_b = _tool_hint(a), _tool_hint(b)
+    if hint_a and hint_b and hint_a != hint_b:
+        return [a, b]
+    return None
+
+
+# ── Main entry ────────────────────────────────────────────────────────────────
+
+def route_stream(
+    user_input: str,
+    *,
+    context: RouteContext | None = None,
+) -> tuple:
+    context = (context or RouteContext.desktop()).normalized()
+    global _pending_msg_recipient, _awaiting_msg_recipient, _last_msg_recipient, _last_message_send_result, _pending_message_draft, _fuzzy_contact_suggestions, _pending_email_reply
+    audit_log("query_received", query=redact_approval_ids(user_input)[:500])
+    modifiers = prompt_modifiers.parse(user_input)
+    user_input = modifiers.clean_text
+    modifier_system = modifiers.system_extra
+    lower = user_input.lower().strip()
+    if lower:
+        mem.track_topic(redact_approval_ids(lower))
+
+    # Explicit operative control commands must remain reachable even when an
+    # unrelated email or message draft is pending.
+    if _is_cancel_task_command(lower):
+        return _s(_cancel_task_reply(context)), "Operative"
+    approval_command = _parse_task_approval_command(user_input)
+    if approval_command:
+        action, approval_id = approval_command
+        if action == "cancel":
+            from operative import cancel_task_approval
+
+            cancelled = cancel_task_approval(approval_id, context=context)
+            reply = (
+                "Task approval cancelled."
+                if cancelled
+                else "Task approval could not be cancelled."
+            )
+            return _s(reply), "Operative"
+        return _task_approval_stream(approval_id, context=context), "Operative"
+
+    composed_message = (
+        _parse_message_compose(user_input)
+        or _parse_message_replacement_compose(user_input)
+        or _parse_indirect_message_request(user_input)
+    )
+    composed_email = _parse_email_compose(user_input)
+    email_recipient_only = "" if composed_email else _parse_email_recipient_only(user_input)
+    contact_details_query = _parse_contact_details_query(user_input)
+    last_response_recipient = _parse_send_last_response_request(user_input)
+    recipient_only = ""
+    has_message_verb = bool(re.search(r"\b(?:send|message|text)\b", lower))
+    if not composed_message and has_message_verb:
+        recipient_only = _parse_message_recipient_only(user_input)
+
+    # ── 0. Pending email state ────────────────────────────────────────────────
+    if _is_email_cancel_query(lower) and (
+        _has_pending_email_draft() or _has_pending_email_recipient()
+        or _has_pending_email_reply() or "email" in lower
+    ):
+        if not (_has_pending_email_draft() or _has_pending_email_recipient() or _has_pending_email_reply()):
+            return _s("No active email draft."), "Gmail"
+        previous = (
+            (_pending_email_draft or _pending_email_recipient or {}).get("recipient")
+            or (_pending_email_reply or {}).get("sender")
+            or "email"
+        )
+        _clear_pending_email_draft()
+        return _s(f"Canceled the email draft to {previous}."), "Gmail"
+
+    # ── 0a. Pending email reply: user provides body after "reply to X" ────────
+    if _has_pending_email_reply():
+        reply = _pending_email_reply or {}
+        if _is_email_cancel_query(lower) or _is_message_cancel_query(lower):
+            _clear_pending_email_draft()
+            return _s(f"Canceled the reply to {reply.get('sender', 'that sender')}."), "Gmail"
+        interrupt_route = _pending_draft_interrupt_route(user_input, lower)
+        if interrupt_route is not None:
+            return interrupt_route
+        body = _sanitize_email_text(user_input)
+        if not body or body.lower() in {"yes", "yeah", "yep", "confirm", "send", "send it"}:
+            return _s(f"What would you like to say to {reply.get('sender', 'them')}?"), "Gmail"
+        _r_sender = reply["sender"]
+        _r_addr = reply["from_address"]
+        _r_subject = reply["subject"]
+        _clear_pending_email_draft()  # clears _pending_email_reply
+        _set_pending_email_draft(_r_sender, _r_addr, _r_subject, body)
+        return _s(_email_confirmation_prompt()), "Gmail"
+
+    if _has_pending_email_draft():
+        if _is_email_cancel_query(lower) or _is_message_cancel_query(lower):
+            previous = (_pending_email_draft or {}).get("recipient", "email")
+            _clear_pending_email_draft()
+            return _s(f"Canceled the email draft to {previous}."), "Gmail"
+        if _is_message_confirm_query(lower):
+            draft = _pending_email_draft or {}
+            try:
+                result = gs.send_email(draft["to"], draft["subject"], draft["body"])
+            except Exception:
+                return _s("Email is unavailable. You may need to re-authorize Google access."), "Gmail"
+            _clear_pending_email_draft()
+            return _s(result), "Gmail"
+        if composed_email:
+            recipient, subject, body = composed_email
+            to_address, error = _resolve_email_recipient(recipient)
+            if error:
+                return _s(error), "Gmail"
+            _set_pending_email_draft(recipient, to_address, subject, body)
+            return _s(_email_confirmation_prompt()), "Gmail"
+        subject_update = re.match(r"^subject\s*:?\s+(.+)$", user_input.strip(), flags=re.IGNORECASE)
+        body_update = re.match(r"^(?:body|message|say|saying)\s*:?\s+(.+)$", user_input.strip(), flags=re.IGNORECASE | re.DOTALL)
+        if subject_update:
+            draft = _pending_email_draft or {}
+            _set_pending_email_draft(
+                draft.get("recipient", ""),
+                draft.get("to", ""),
+                subject_update.group(1),
+                draft.get("body", ""),
+            )
+            return _s(_email_confirmation_prompt()), "Gmail"
+        if body_update:
+            draft = _pending_email_draft or {}
+            _set_pending_email_draft(
+                draft.get("recipient", ""),
+                draft.get("to", ""),
+                draft.get("subject", "Message from Aman"),
+                body_update.group(1),
+            )
+            return _s(_email_confirmation_prompt()), "Gmail"
+        interrupt_route = _pending_draft_interrupt_route(user_input, lower)
+        if interrupt_route is not None:
+            return interrupt_route
+        return _s(_email_confirmation_prompt()), "Gmail"
+
+    if _has_pending_email_recipient():
+        draft = _pending_email_recipient or {}
+        if _is_message_confirm_query(lower):
+            return _s(f"What would you like the email to say to {draft.get('recipient', 'that recipient')}?"), "Gmail"
+        if composed_email:
+            recipient, subject, body = composed_email
+            to_address, error = _resolve_email_recipient(recipient)
+            if error:
+                return _s(error), "Gmail"
+            _set_pending_email_draft(recipient, to_address, subject, body)
+            return _s(_email_confirmation_prompt()), "Gmail"
+        if email_recipient_only:
+            to_address = _direct_email_or_empty(email_recipient_only)
+            _set_pending_email_recipient(email_recipient_only, to_address)
+            return _s(f"What would you like the email to say to {email_recipient_only}?"), "Gmail"
+        interrupt_route = _pending_draft_interrupt_route(user_input, lower)
+        if interrupt_route is not None:
+            return interrupt_route
+        body = _sanitize_email_text(user_input)
+        if not body or body.lower() in {"yes", "yeah", "yep", "confirm", "send", "send it"}:
+            return _s(f"What would you like the email to say to {draft.get('recipient', 'that recipient')}?"), "Gmail"
+        _set_pending_email_draft(
+            draft.get("recipient", ""),
+            draft.get("to", "") or _resolve_email_recipient(draft.get("recipient", ""))[0],
+            draft.get("subject", "Message from Aman"),
+            body,
+        )
+        if not (_pending_email_draft or {}).get("to"):
+            _clear_pending_email_draft()
+            return _s(f"I need an email address for {draft.get('recipient', 'that recipient')}. Use an address like name@example.com."), "Gmail"
+        return _s(_email_confirmation_prompt()), "Gmail"
+
+    if composed_email:
+        recipient, subject, body = composed_email
+        to_address, error = _resolve_email_recipient(recipient)
+        if error:
+            return _s(error), "Gmail"
+        _clear_message_state()
+        _set_pending_email_draft(recipient, to_address, subject, body)
+        return _s(_email_confirmation_prompt()), "Gmail"
+
+    if email_recipient_only:
+        _clear_message_state()
+        to_address = _direct_email_or_empty(email_recipient_only)
+        _set_pending_email_recipient(email_recipient_only, to_address)
+        return _s(f"What would you like the email to say to {email_recipient_only}?"), "Gmail"
+
+    # ── Email read fast-path: "read my emails" / "show my inbox" ────────────
+    if _looks_like_email_read_query(lower) and not _is_email_digest_query(lower) and not composed_email and not email_recipient_only:
+        try:
+            _inbox_emails = gs.get_unread_email_subjects(max_results=5)
+        except Exception:
+            return _s("Email is unavailable. You may need to re-authorize Google access."), "Gmail"
+        if not _inbox_emails:
+            return _s("Your inbox is clear."), "Gmail"
+        _lines = [f"From {e['sender']}: {e['subject']}" for e in _inbox_emails]
+        return _s(f"You have {len(_inbox_emails)} unread email(s).\n" + "\n".join(_lines)), "Gmail"
+
+    # ── Email digest fast-path: "what are my emails about today?" ────────────
+    if _is_email_digest_query(lower) and not composed_email and not email_recipient_only:
+        try:
+            _emails = gs.get_unread_email_subjects(max_results=10)
+        except Exception:
+            return _s("No email access available."), "Email Digest"
+        if not _emails:
+            return _s("Your inbox is clear — no unread emails."), "Email Digest"
+        _email_lines = "\n".join(
+            f"From {e['sender']}: {e['subject']}. {e.get('snippet', '')}"
+            for e in _emails[:10]
+        )
+        _digest_prompt = (
+            f"Unread emails ({len(_emails)}):\n{_email_lines}"
+        )
+        _DIGEST_SYSTEM = (
+            "You are Jarvis. Summarize these unread emails in 3 bullet points. "
+            "Be concise and actionable. Focus on what needs a response."
+        )
+        def _digest_stream(prompt=_digest_prompt, system=_DIGEST_SYSTEM, fallback_emails=_emails):
+            try:
+                from brains.brain_ollama import ask_local_stream
+                for chunk in ask_local_stream(prompt, system_extra=system):
+                    yield chunk
+            except Exception:
+                yield _build_email_digest(fallback_emails)
+        return _digest_stream(), "Email Digest"
+
+    # ── Email reply fast-path: "reply to that email from X" ──────────────────
+    if _is_email_reply_query(lower) and not composed_email and not email_recipient_only:
+        # extract name hint from "reply to email from Sarah" / "respond to John's email"
+        _name_m = re.search(
+            r"(?:from|to|by|with)\s+([A-Za-z][A-Za-z '\-]{1,30})"
+            r"|([A-Za-z][A-Za-z '\-]{1,30})(?:'s|s')\s+email",
+            lower,
+        )
+        _reply_hint = (_name_m.group(1) or _name_m.group(2) or "").strip() if _name_m else ""
+        _reply_info = _find_email_to_reply(_reply_hint)
+        if _reply_info:
+            _r_name, _r_addr, _r_subject = _reply_info
+            _clear_message_state()
+            _set_pending_email_reply(_r_name, _r_addr, _r_subject)
+            return _s(
+                f"Found email from {_r_name} — \"{_r_subject[4:]}\". "
+                f"What would you like to say back?"
+            ), "Gmail"
+        return _s("I couldn't find a recent email to reply to. Check your inbox."), "Gmail"
+
+    # ── iMessage inbox read: "any new messages from X" / "did X reply" ─────────
+    _msg_read_contact = _parse_message_read_query(user_input)
+    if _msg_read_contact:
+        return _s(msg.read_recent_thread(_msg_read_contact)), "Messages"
+
+    # ── Email search: "find emails from X" / "search email for Y" ────────────
+    _email_search_q = _parse_email_search_query(user_input)
+    if _email_search_q:
+        def _email_search_gen(q=_email_search_q):
+            try:
+                yield gs.search_emails(q)
+            except Exception as exc:
+                yield f"Email search unavailable: {exc}"
+        return _email_search_gen(), "Gmail"
+
+    # ── 0a. Contact alias learning ────────────────────────────────────────────
+    # Patterns: "my mom is [redacted]", "mom's number is 5105550125",
+    # "remember mom as [redacted]", "save mom as 5105550125"
+    # Requires "my <word>" prefix OR explicit remember/save/add verb to avoid
+    # false-positive matches on conversational "X is Y" sentences.
+    _RELATIONSHIP_WORDS = {"mom","mother","ammi","dad","father","abu","abbu","wife","husband",
+                           "sister","brother","bhai","apa","girlfriend","boyfriend","partner",
+                           "grandma","grandpa","nana","nani","boss","roommate","bestie"}
+    _alias_learn = re.match(
+        r"my\s+(\w+)(?:'?s)?\s+(?:is|number\s+is|contact\s+is|phone\s+is)\s+(.+)",
+        lower.strip(),
+    ) or re.match(
+        r"(\w+)(?:'?s)?\s+(?:number\s+is|phone\s+is|contact\s+is)\s+(.+)",
+        lower.strip(),
+    ) or re.match(
+        r"(?:remember|save|add)\s+(\w+)\s+(?:as|is)\s+(.+)",
+        lower.strip(),
+    )
+    if _alias_learn:
+        alias_key = _alias_learn.group(1).strip()
+        alias_val = _alias_learn.group(2).strip()
+        # Only fire for known relationship words OR explicit "my X is" form
+        if alias_key in _RELATIONSHIP_WORDS:
+            phone_match = re.search(r"[\d]{10}", alias_val.replace("-","").replace(" ","").replace("+","").replace("(","").replace(")",""))
+            phone_val = phone_match.group(0) if phone_match else ""
+            name_val = alias_val if not phone_val else alias_val
+            # If it looks like a number, resolve it; otherwise use as name
+            if re.match(r"^[\d\s\-\+\(\)]+$", alias_val) and phone_val:
+                msg.save_contact_alias(alias_key, phone_val, phone_val)
+                return _s(f"Got it — I'll message {alias_key} at {phone_val} from now on."), "Messages"
+            else:
+                # Name given — try to resolve it in Contacts to get the phone
+                resolved = msg.lookup_contact(alias_val)
+                if resolved and not resolved.startswith("__"):
+                    msg.save_contact_alias(alias_key, alias_val, resolved)
+                    return _s(f"Got it — {alias_key} is {alias_val}. I'll use that from now on."), "Messages"
+                else:
+                    msg.save_contact_alias(alias_key, alias_val, "")
+                    return _s(f"Saved: {alias_key} = {alias_val}. If they have a number in Contacts I'll find it, otherwise ask me for their number."), "Messages"
+
+    # ── 0. Pending message state ──────────────────────────────────────────────
+    if _is_message_cancel_query(lower):
+        # If there's no message state but there IS a pending email draft, cancel that instead
+        if not (
+            _has_pending_message_draft()
+            or _pending_msg_recipient
+            or _awaiting_msg_recipient
+            or _fuzzy_contact_suggestions
+        ):
+            if _has_pending_email_draft() or _has_pending_email_recipient():
+                previous = (_pending_email_draft or _pending_email_recipient or {}).get("recipient", "email")
+                _clear_pending_email_draft()
+                return _s(f"Canceled the email draft to {previous}."), "Gmail"
+            return _s("No active message draft."), "Messages"
+        had_draft = _has_pending_message_draft()
+        previous = (
+            (_pending_message_draft or {}).get("recipient")
+            or _pending_msg_recipient
+            or "message"
+        )
+        _clear_message_state()
+        if had_draft:
+            return _s(f"Canceled the draft to {previous}."), "Messages"
+        return _s(f"Canceled the message flow for {previous}."), "Messages"
+
+    if _looks_like_message_status_query(lower):
+        return _s(_last_message_status_text()), "Messages"
+
+    if last_response_recipient:
+        if not _last_assistant_reply:
+            return _s("I do not have a previous Jarvis response to send. Tell me the exact message content first."), "Messages"
+        body = _safe_forwardable_message_text(_last_assistant_reply)
+        _clear_message_state()
+        _set_pending_message_draft(last_response_recipient, body)
+        return _s(_message_confirmation_prompt(last_response_recipient, body)), "Messages"
+
+    if (
+        not composed_message
+        and not recipient_only
+        and not _has_pending_message_draft()
+        and not _pending_msg_recipient
+        and (
+            lower.strip() in {"confirm", "send", "confirm send", "yes", "yep", "yup", "ok", "okay", "sure", "do it"}
+            or any(phrase in lower for phrase in ("send it", "send now", "yes send", "go ahead and send", "approve send"))
+        )
+    ):
+        return _s("No draft is ready to send yet. Tell me the recipient and message first."), "Messages"
+
+    if _has_pending_message_draft():
+        recipient = _pending_message_draft["recipient"]
+        body = _pending_message_draft["body"]
+        resolved_address = (_pending_message_draft.get("resolved_address") or "").strip()
+        recipient_correction = _parse_message_recipient_correction(user_input)
+        if _is_intro_detail_request(lower):
+            _set_pending_message_draft(recipient, _JARVIS_INTRO_DETAILED, resolved_address=resolved_address or None)
+            return _s(_message_confirmation_prompt(recipient, _JARVIS_INTRO_DETAILED)), "Messages"
+        if contact_details_query:
+            _clear_message_state()
+            return _s(msg.describe_contact_handles(contact_details_query)), "Contacts"
+        if composed_message:
+            next_recipient, next_body = composed_message
+            unsafe_reply = _unsafe_message_draft_reply(next_body, keep_current=True)
+            if unsafe_reply:
+                return _s(unsafe_reply), "Messages"
+            _clear_message_state()
+            _set_pending_message_draft(next_recipient, next_body)
+            return _s(_message_confirmation_prompt(next_recipient, next_body)), "Messages"
+        reply_compose = _parse_reply_compose(user_input)
+        if reply_compose:
+            next_recipient, next_body = reply_compose
+            unsafe_reply = _unsafe_message_draft_reply(next_body, keep_current=True)
+            if unsafe_reply:
+                return _s(unsafe_reply), "Messages"
+            _clear_message_state()
+            resolved = _eager_resolve_contact(next_recipient)
+            _set_pending_message_draft(next_recipient, next_body, resolved_address=resolved)
+            return _s(f"Draft reply to {next_recipient}: \"{next_body}\". Say confirm send to send it, or edit it first."), "Messages"
+        if recipient_correction:
+            _fuzzy_contact_suggestions.clear()
+            _awaiting_msg_recipient = False
+            _set_pending_message_draft(recipient_correction, body)
+            return _s(_message_confirmation_prompt(recipient_correction, body)), "Messages"
+        search_query = _extract_search_query(user_input)
+        if search_query:
+            return _s(_ws.search(search_query)), "Search"
+        # Interrupt route: briefing, time, weather etc. escape from pending draft context
+        interrupt_early = _pending_draft_interrupt_route(user_input, lower)
+        if interrupt_early is not None:
+            return interrupt_early
+        bare_contact_switch = _parse_bare_pending_contact_switch(user_input)
+        if bare_contact_switch:
+            _fuzzy_contact_suggestions.clear()
+            _awaiting_msg_recipient = False
+            _set_pending_message_draft(bare_contact_switch, body)
+            return _s(_message_confirmation_prompt(bare_contact_switch, body)), "Messages"
+        if _looks_like_message_rephrase(lower):
+            _clear_message_state()
+            _set_awaiting_recipient()
+            return _s("Okay — let's redo it. Who would you like to message?"), "Messages"
+        if _looks_like_message_status_query(lower):
+            return _s(_last_message_status_text()), "Messages"
+        if _awaiting_msg_recipient and _fuzzy_contact_suggestions:
+            if composed_message:
+                next_recipient, next_body = composed_message
+                unsafe_reply = _unsafe_message_draft_reply(next_body, keep_current=True)
+                if unsafe_reply:
+                    return _s(unsafe_reply), "Messages"
+                _clear_pending_message_draft()
+                _clear_pending_recipient()
+                _fuzzy_contact_suggestions.clear()
+                _set_pending_message_draft(next_recipient, next_body)
+                return _s(_message_confirmation_prompt(next_recipient, next_body)), "Messages"
+            if recipient_only:
+                _fuzzy_contact_suggestions.clear()
+                _awaiting_msg_recipient = False
+                _set_pending_message_draft(recipient_only, body)
+                return _s(_message_confirmation_prompt(recipient_only, body)), "Messages"
+            selected = _is_contact_selection(lower)
+            if selected:
+                resolved = msg.resolve_last_contact_selection(selected) or selected
+                _fuzzy_contact_suggestions.clear()
+                _awaiting_msg_recipient = False
+                _set_pending_message_draft(
+                    selected,
+                    body,
+                    resolved_address=resolved if resolved != selected else None,
+                )
+                return _s(_message_confirmation_prompt(selected, body)), "Messages"
+            return _s(_message_contact_resolution_prompt()), "Messages"
+        if _is_message_confirm_query(lower):
+            _last_msg_recipient = recipient
+            send_target = resolved_address or recipient
+            send_result = msg.send_imessage(send_target, body)
+            # If send_imessage couldn't resolve the contact, offer fuzzy suggestions
+            lower_result = send_result.lower()
+            if "did you mean" in lower_result or (
+                "i couldn't find" in lower_result and "did you mean" in lower_result
+            ):
+                suggestions = msg.get_last_contact_options() or msg.get_contact_names_matching(recipient)
+                if suggestions:
+                    _set_message_contact_resolution(suggestions)
+            elif "i found multiple contacts" in lower_result or "more than one contact" in lower_result:
+                # Ambiguous match — suggestions already listed in the response
+                suggestions = msg.get_last_contact_options() or msg.get_contact_names_matching(recipient)
+                if suggestions:
+                    _set_message_contact_resolution(suggestions)
+            elif lower_result.startswith("sent to "):
+                _last_message_send_result = {
+                    "recipient": recipient,
+                    "body": body,
+                    "result": send_result,
+                }
+                msg_thread.record_sent(recipient, send_target, body)
+                _clear_pending_message_draft()
+                _clear_pending_recipient()
+                _fuzzy_contact_suggestions.clear()
+                if send_target != recipient and send_result.strip() == f"Sent to {send_target}.":
+                    send_result = f"Sent to {recipient}."
+            return _s(send_result), "Messages"
+        if recipient_only:
+            _clear_pending_message_draft()
+            _clear_pending_recipient()
+            _fuzzy_contact_suggestions.clear()
+            _set_pending_recipient(recipient_only)
+            return _s(f"What would you like to say to {recipient_only}?"), "Messages"
+        if "wrong contact" in lower or "wrong person" in lower:
+            _clear_message_state()
+            _set_awaiting_recipient()
+            return _s("Okay — let's redo the recipient. Who would you like to message?"), "Messages"
+        interrupt_route = _pending_draft_interrupt_route(user_input, lower)
+        if interrupt_route is not None:
+            return interrupt_route
+        # Non-matching text while a draft is pending: treat it as a body replacement
+        # rather than repeating the stale draft endlessly.
+        # Guard: meta-commands that weren't caught above must not become message bodies.
+        _META_BODY_BLOCKED = {
+            "cancel", "abort", "stop", "discard", "nvm", "nevermind",
+            "confirm", "send", "yes", "yeah", "yep", "yup", "no", "nope",
+            "ok", "okay", "sure", "do it", "forget it", "ignore it",
+        }
+        candidate_body = user_input.strip().strip("\"'.!?")
+        if candidate_body and candidate_body.lower().strip() not in _META_BODY_BLOCKED:
+            unsafe_reply = _unsafe_message_draft_reply(candidate_body, keep_current=True)
+            if unsafe_reply:
+                return _s(unsafe_reply), "Messages"
+            _set_pending_message_draft(recipient, candidate_body)
+            return _s(_message_confirmation_prompt(recipient, candidate_body)), "Messages"
+        return _s(_message_confirmation_prompt(recipient, body)), "Messages"
+
+    if _awaiting_msg_recipient:
+        recipient_correction = _parse_message_recipient_correction(user_input)
+        if not lower:
+            return _s("Who would you like to message?"), "Messages"
+        if contact_details_query:
+            _clear_pending_recipient()
+            _fuzzy_contact_suggestions.clear()
+            _awaiting_msg_recipient = False
+            return _s(msg.describe_contact_handles(contact_details_query)), "Contacts"
+        _sq = _extract_search_query(user_input)
+        if _sq:
+            return _s(_ws.search(_sq)), "Search"
+        interrupt_early = _pending_draft_interrupt_route(user_input, lower)
+        if interrupt_early is not None:
+            return interrupt_early
+        if composed_message:
+            recipient, body = composed_message
+            unsafe_reply = _unsafe_message_draft_reply(body)
+            if unsafe_reply:
+                return _s(unsafe_reply), "Messages"
+            _awaiting_msg_recipient = False
+            _fuzzy_contact_suggestions.clear()
+            _clear_pending_recipient()
+            _set_pending_message_draft(recipient, body)
+            return _s(_message_confirmation_prompt(recipient, body)), "Messages"
+        if recipient_correction:
+            _awaiting_msg_recipient = False
+            _fuzzy_contact_suggestions.clear()
+            _set_pending_recipient(recipient_correction)
+            return _s(f"What would you like to say to {recipient_correction}?"), "Messages"
+        if recipient_only:
+            _awaiting_msg_recipient = False
+            _fuzzy_contact_suggestions.clear()
+            _set_pending_recipient(recipient_only)
+            return _s(f"What would you like to say to {recipient_only}?"), "Messages"
+        # ── Fuzzy suggestion follow-up: user is picking from previously offered names ──
+        if _fuzzy_contact_suggestions:
+            selected = _is_contact_selection(lower)
+            if selected:
+                _fuzzy_contact_suggestions.clear()
+                _set_pending_recipient(selected)
+                return _s(f"What would you like to say to {selected}?"), "Messages"
+            else:
+                names_list = ", ".join(_fuzzy_contact_suggestions)
+                return _s(f"I didn't catch that. Did you mean one of: {names_list}?"), "Messages"
+        recipient = _parse_message_recipient_only(user_input)
+        if recipient:
+            _set_pending_recipient(recipient)
+            return _s(f"What would you like to say to {recipient}?"), "Messages"
+        return _s("I still need just the contact name, for example: Contact Name: Chunky."), "Messages"
+
+    if _pending_msg_recipient:
+        recipient_correction = _parse_message_recipient_correction(user_input)
+        reply_to_contact = _parse_reply_to_contact(user_input)
+        if not lower:
+            return _s(f"What would you like to say to {_pending_msg_recipient}?"), "Messages"
+        if reply_to_contact:
+            _clear_pending_recipient()
+            return _s(_reply_to_thread_response(reply_to_contact)), "Messages"
+        interrupt_route = _pending_draft_interrupt_route(user_input, lower)
+        if interrupt_route is not None:
+            return interrupt_route
+        if _is_intro_detail_request(lower):
+            recipient = _pending_msg_recipient
+            _clear_pending_recipient()
+            resolved = _eager_resolve_contact(recipient)
+            _set_pending_message_draft(recipient, _JARVIS_INTRO_DETAILED, resolved_address=resolved)
+            return _s(_message_confirmation_prompt(recipient, _JARVIS_INTRO_DETAILED)), "Messages"
+        if contact_details_query:
+            _clear_pending_recipient()
+            _fuzzy_contact_suggestions.clear()
+            return _s(msg.describe_contact_handles(contact_details_query)), "Contacts"
+        if composed_message:
+            recipient, body = composed_message
+            unsafe_reply = _unsafe_message_draft_reply(body)
+            if unsafe_reply:
+                return _s(unsafe_reply), "Messages"
+            _clear_pending_recipient()
+            _fuzzy_contact_suggestions.clear()
+            resolved = _eager_resolve_contact(recipient)
+            _set_pending_message_draft(recipient, body, resolved_address=resolved)
+            return _s(_message_confirmation_prompt(recipient, body)), "Messages"
+        if recipient_correction:
+            _set_pending_recipient(recipient_correction)
+            return _s(f"What would you like to say to {recipient_correction}?"), "Messages"
+        if recipient_only:
+            _set_pending_recipient(recipient_only)
+            return _s(f"What would you like to say to {recipient_only}?"), "Messages"
+        if "wrong contact" in lower or "wrong person" in lower:
+            _clear_pending_recipient()
+            _fuzzy_contact_suggestions.clear()
+            _set_awaiting_recipient()
+            return _s("Okay — let's redo the recipient. Who would you like to message?"), "Messages"
+        if _looks_like_message_rephrase(lower):
+            return _s(f"Okay — what should I say to {_pending_msg_recipient}?"), "Messages"
+        if _looks_like_message_status_query(lower):
+            return _s(f"Not yet. I still need the exact message content for {_pending_msg_recipient}."), "Messages"
+        if lower in {"sms", "imessage", "i message", "message"}:
+            return _s(f"Got it. What message should I send to {_pending_msg_recipient}?"), "Messages"
+        unsafe_reply = _unsafe_message_draft_reply(user_input)
+        if unsafe_reply:
+            return _s(unsafe_reply), "Messages"
+        recipient = _pending_msg_recipient
+        pre_resolved = _pending_resolved_address
+        _clear_pending_recipient()
+        resolved = pre_resolved or _eager_resolve_contact(recipient)
+        _set_pending_message_draft(recipient, user_input, resolved_address=resolved)
+        return _s(_message_confirmation_prompt(recipient, user_input)), "Messages"
+
+    if not lower:
+        return _s("Tell me what you want me to do."), "Chat"
+
+    if contact_details_query:
+        return _s(msg.describe_contact_handles(contact_details_query)), "Contacts"
+
+    if _is_intro_detail_request(lower):
+        return _s(_JARVIS_INTRO_DETAILED), "Status"
+
+    if (
+        "teach" in lower
+        and "respond to" in lower
+        and any(term in lower for term in ("when she replies", "when he replies", "when they reply", "when fiza replies"))
+    ):
+        return _s(
+            "I can draft and send outgoing Messages after your confirmation, but I do not yet monitor incoming iMessage replies. "
+            "To teach this safely, add a rule like: remember that when Fiza replies, ask me before drafting a response. "
+            "Next build step is an explicit Messages inbox listener with a permission gate."
+        ), "Messages"
+
+    # ── Meeting prep fast-path ────────────────────────────────────────────────
+    if _is_meeting_prep_query(lower):
+        try:
+            _next_ev = gs.get_next_event()
+            if _next_ev:
+                return _s(_format_next_event(_next_ev)), "Calendar"
+            return _s("No upcoming meetings in the next 24 hours."), "Calendar"
+        except Exception:
+            return _s("Calendar needs re-authorization. On your MacBook open Terminal and run: python google_services.py --reauth  or visit jarvis-ai/auth to reconnect."), "Calendar"
+
+    # ── Incoming message relay: "Farhan replied: hey man" ────────────────────
+    _incoming_match = _is_incoming_message_relay(user_input)
+    if _incoming_match:
+        _in_contact = _incoming_match.group(1).strip()
+        _in_body = _incoming_match.group(2).strip()
+        if _looks_like_contact_name(_in_contact) and len(_in_body) >= 2:
+            msg_thread.record_incoming(_in_contact, _in_body)
+            resolved = _eager_resolve_contact(_in_contact)
+            # Static draft first (explicit reply instruction in the body)
+            reply_body = _draft_reply_from_relay_body(_in_body)
+            if not reply_body:
+                # Context-aware suggestion using thread history via local model
+                reply_body = _suggest_reply_from_context(_in_contact, _in_body)
+            if reply_body:
+                unsafe_reply = _unsafe_message_draft_reply(reply_body)
+                if unsafe_reply:
+                    return _s(unsafe_reply), "Messages"
+                _set_pending_message_draft(_in_contact, reply_body, resolved_address=resolved)
+                return _s(
+                    f"Got it. {_in_contact} said: '{_in_body}'. "
+                    f"Suggested reply: '{reply_body}'. "
+                    f"Say confirm send or tell me what to say instead."
+                ), "Messages"
+            _set_pending_recipient(_in_contact, resolved_address=resolved or "")
+            return _s(f"Got it — {_in_contact} replied: '{_in_body}'. What would you like to say back?"), "Messages"
+
+    _reply_compose = _parse_reply_compose(user_input)
+    if _reply_compose:
+        recipient, body = _reply_compose
+        unsafe_reply = _unsafe_message_draft_reply(body)
+        if unsafe_reply:
+            return _s(unsafe_reply), "Messages"
+        resolved = _eager_resolve_contact(recipient)
+        _set_pending_message_draft(recipient, body, resolved_address=resolved)
+        return _s(f"Draft reply to {recipient}: \"{body}\". Say confirm send to send it, or edit it first."), "Messages"
+
+    # ── Reply-to: "reply to Farhan" / "respond to Farhan's message" ──────────
+    _rt_contact = _parse_reply_to_contact(user_input)
+    if _rt_contact:
+        return _s(_reply_to_thread_response(_rt_contact)), "Messages"
+
+    # ── Wake-word / greeting acknowledgement ─────────────────────────────────
+    if lower in {
+        "jarvis", "hey jarvis", "ok jarvis", "okay jarvis",
+        "hello jarvis", "hi jarvis", "yo jarvis",
+    }:
+        return _s("I'm here. What do you need?"), "Chat"
+
+    # ── Morning / time-of-day greeting → auto-briefing ────────────────────────
+    _MORNING_TRIGGERS = {
+        "good morning", "morning", "morning jarvis", "good morning jarvis",
+        "mornin", "mornin jarvis",
+    }
+    _AFTERNOON_TRIGGERS = {
+        "good afternoon", "afternoon", "afternoon jarvis", "good afternoon jarvis",
+    }
+    _EVENING_TRIGGERS = {
+        "good evening", "evening jarvis", "good evening jarvis",
+    }
+    _NIGHT_TRIGGERS = {
+        "good night", "good night jarvis", "night jarvis", "goodnight jarvis",
+    }
+    if lower in _MORNING_TRIGGERS or lower in _AFTERNOON_TRIGGERS or lower in _EVENING_TRIGGERS:
+        def _greeting_brief_gen():
+            from briefing import _greeting
+            from datetime import datetime
+            greeting = _greeting(datetime.now())
+            brief = _jagents.run_briefing()
+            yield f"{greeting}\n\n{brief}"
+        return _greeting_brief_gen(), "Jarvis"
+    if lower in _NIGHT_TRIGGERS:
+        return _s("Good night. Systems standing by — I'll be here when you need me."), "Chat"
+
+    # ── /resume command — resume an interrupted task ──────────────────────────
+    if _is_resume_command(lower):
+        return _resume_command_stream(user_input, context=context), "Operative"
+
+    # ── /task command — run operative end-to-end ─────────────────────────────
+    if _is_task_command(lower):
+        task_desc = user_input.strip()[len("/task"):].strip()
+        return _task_command_stream(task_desc, context=context), "Operative"
+
+    # ── /summarize command — local LLM / extractive summarization ─────────────
+    if _is_summarize_command(lower):
+        _sum_raw = user_input.strip()
+        # Strip both spellings of the command prefix
+        if _sum_raw.lower().startswith("/summarise"):
+            arg = _sum_raw[len("/summarise"):].strip()
+        else:
+            arg = _sum_raw[len("/summarize"):].strip()
+        if not arg:
+            return _s("Usage: /summarize <text or file path>"), "Summarize"
+        from harness import summarizer as _sumz
+        _sum_path = os.path.expanduser(arg)
+        if os.path.isfile(_sum_path):
+            result = _sumz.summarize_file(_sum_path)
+        else:
+            result = _sumz.summarize(arg)
+        return _s(result), "Summarize"
+
+    # ── Git operations ────────────────────────────────────────────────────────
+    if _is_git_commit_query(lower):
+        return _s(_git_commit_reply(user_input)), "Git"
+    if _is_git_diff_query(lower):
+        return _s(_git_diff_reply(lower)), "Git"
+    if _is_git_status_query(lower):
+        return _s(_git_status_reply()), "Git"
+    if _is_git_log_query(lower):
+        return _s(_git_log_reply(lower)), "Git"
+
+    # ── Task list fast-path: "what are my tasks" / "show task list" ─────────
+    if _is_task_list_query(lower):
+        try:
+            result = _jagents._agent_tasks()
+            return _s(result.get("result", "Task hub unavailable.")), "Tasks"
+        except Exception:
+            return _s("Task hub unavailable."), "Tasks"
+
+    # ── Vault notes listing fast-path ─────────────────────────────────────────
+    if re.search(
+        r"\b(?:what\s+notes?|list\s+(?:my\s+)?notes?|show\s+(?:my\s+)?notes?|notes?\s+(?:in|from)\s+(?:my\s+)?vault)\b",
+        lower,
+    ):
+        try:
+            _vstat = vault.status()
+            _doc_count = _vstat.get("doc_count", 0)
+            _files = _vstat.get("indexed_files", [])[:10]
+            if _files:
+                _titles = [os.path.splitext(os.path.basename(f))[0] for f in _files]
+                _note_list = "\n".join(f"  • {t}" for t in _titles)
+                return _s(f"Vault has {_doc_count} notes. Sample:\n{_note_list}"), "Vault"
+            return _s(f"Vault has {_doc_count} indexed notes."), "Vault"
+        except Exception:
+            return _s("Vault is unavailable right now."), "Vault"
+
+    # ── Catch-up / "what did I miss" fast-path ────────────────────────────────
+    if _is_catchup_query(lower):
+        def _catchup_gen():
+            brief = _jagents.run_briefing()
+            yield f"Here's what you missed:\n\n{brief}"
+        return _catchup_gen(), "Jarvis"
+
+    # ── End-of-conversation acknowledgement ───────────────────────────────────
+    if lower in {
+        "that's all", "that's it", "that'll be all", "that's all for now",
+        "that will be all", "nothing else", "nothing more", "that's everything",
+        "i'm done", "all done", "we're done", "that's all i need",
+        "thank you jarvis", "thanks jarvis", "cheers jarvis",
+    }:
+        return _s("Alright, I'll be here when you need me."), "Chat"
+
+    # ── Vault capture early check: "note this", "remember this", "save to notes" ─
+    # Must run before _dispatch_single_intent so calendar/email hints don't steal
+    # phrases that contain words like "meeting", "email", "remind" as part of note content.
+    _early_capture_prefixes = (
+        "note this", "remember this:", "save to notes:", "vault this",
+    )
+    if any(lower.startswith(p) or lower == p.rstrip(":") for p in _early_capture_prefixes):
+        _ecap = vault_capture.handle_capture(user_input)
+        if _ecap is not None:
+            return _s(_ecap), "Vault"
+
+    # ── Multi-intent: answer two distinct questions in one query ──────────────
+    multi_parts = _detect_multi_intent(lower)
+    if multi_parts:
+        texts = [_dispatch_single_intent(p) for p in multi_parts]
+        if all(t is not None for t in texts):
+            return _s(" ".join(texts)), "Multi"
+
+    # ── Meeting fast-paths (must run before _dispatch_single_intent to avoid
+    #    the calendar hint swallowing "meeting" queries as calendar events) ────
+    if _is_meeting_captions_query(lower):
+        if any(term in lower for term in ("read", "show", "what are", "display", "copy")):
+            return _s(browser.read_meeting_captions()), "Browser"
+        return _s(browser.summarize_meeting_captions(user_input)), "Browser"
+    if _is_meeting_diagnostics_query(lower):
+        return _s(_meeting_diagnostics_reply()), "Meeting"
+    if _is_focus_meeting_query(lower):
+        return _s(browser.focus_meeting_tab()), "Browser"
+    meeting_safe = _meeting_safe_mode_requested(lower)
+    if meeting_safe == "on":
+        call_privacy.set_enabled(True)
+        return _s(call_privacy.status_text()), "Meeting"
+    if meeting_safe == "off":
+        call_privacy.set_enabled(False)
+        return _s(call_privacy.status_text()), "Meeting"
+    if meeting_safe == "status":
+        return _s(call_privacy.status_text()), "Meeting"
+
+    # ── Single-intent fast-path (time, weather, calendar, email) ─────────────
+    if not composed_message and not recipient_only:
+        _fast = _dispatch_single_intent(user_input)
+        if _fast is not None:
+            return _s(_fast), "Status"
+
+    if _is_current_activity_query(lower):
+        return _s(_current_activity_reply(lower)), "Status"
+
+    # ── 1. Fast-path: zero-latency unambiguous commands ───────────────────────
+
+    # Runtime self-knowledge
+    if _is_messages_history_access_query(lower):
+        return _s(msg.messages_history_permission_text()), "Messages"
+
+    if composed_message:
+        recipient, body = composed_message
+        unsafe_reply = _unsafe_message_draft_reply(body)
+        if unsafe_reply:
+            return _s(unsafe_reply), "Messages"
+        _clear_pending_recipient()
+        resolved = _eager_resolve_contact(recipient)
+        _set_pending_message_draft(recipient, body, resolved_address=resolved)
+        return _s(_message_confirmation_prompt(recipient, body)), "Messages"
+
+    if recipient_only and has_message_verb:
+        _set_pending_recipient(recipient_only)
+        return _s(f"What would you like to say to {recipient_only}?"), "Messages"
+
+    requested_mode = _requested_mode(lower)
+    if requested_mode:
+        return _s(set_mode(requested_mode)), "Status"
+    model_override = _requested_model_override(user_input)
+    if model_override:
+        if model_override.get("action") == "clear":
+            status = clear_forced_model()
+            return _s("Cleared the forced model override." if not status.get("active") else "Model override is still active."), "Status"
+        result = set_forced_model(model_override.get("model", ""))
+        if not result.get("active"):
+            return _s(result.get("error", "Could not set that model override.")), "Status"
+        return _s(f"Forced model override set to {result.get('label', result.get('model'))}."), "Status"
+    if _is_model_status_query(lower):
+        return _s(_runtime_status_reply(user_input)), "Status"
+    if _is_user_identity_query(lower):
+        import memory as _mem
+        facts = _mem.list_facts()
+        name_fact = next((f for f in facts if "aman" in f.lower() or "your name" in f.lower()), None)
+        name = "Aman Imran"
+        if name_fact:
+            import re as _re2
+            m = _re2.search(r"(?:name is|you are|you're|i am)\s+([A-Z][a-z]+(?: [A-Z][a-z]+)*)", name_fact, _re2.IGNORECASE)
+            if m:
+                name = m.group(1)
+        return _s(f"You're {name}. I'm Jarvis — your local AI assistant."), "Status"
+    if _is_capabilities_query(lower):
+        return _s(_capabilities_reply()), "Status"
+    if _is_identity_override_query(lower):
+        return _s(_identity_override_reply()), "Status"
+    if _is_constraint_bypass_query(lower):
+        return _s(_constraint_bypass_reply()), "Status"
+    if _is_capability_boundary_query(lower):
+        return _s(_capability_boundary_reply()), "Status"
+    if _is_generic_message_request(user_input):
+        _set_awaiting_recipient()
+        return _s("Who would you like to message?"), "Messages"
+    # Explicit specialized-agent requests should always win over later fast paths.
+    # In open-source mode we only suppress automatic specialist escalation.
+    if _is_specialized_agent_query(lower):
+        result = specialized_agents.run(user_input)
+        return _s(specialized_agents.result_text(result)), "Specialized Agents"
+    if get_mode() != "open-source" and _is_engineering_specialist_query(lower):
+        result = specialized_agents.run(user_input)
+        return _s(specialized_agents.result_text(result)), "Specialized Agents"
+    if _is_confirm_improvement_query(lower):
+        pending = _pending_improvements[0]
+
+        def _apply_confirmed_stream():
+            yield f"Applying the improvement to {pending['file']}..."
+            result = si.apply_pending_improvement(pending)
+            _pending_improvements[0] = None
+            if result.get("error"):
+                yield f" Could not apply: {result['error']}"
+            else:
+                yield (
+                    f" Done. Applied improvement to {result['file']}. "
+                    f"{result['lines_changed']} lines changed. "
+                    f"Backup saved as {result['backup']}. "
+                    f"Say 'restart yourself' to reload the updated code."
+                )
+
+        return _apply_confirmed_stream(), "Self-Improve"
+
+    if _is_cancel_improvement_query(lower):
+        _pending_improvements[0] = None
+        return _s("Improvement discarded. No changes were made."), "Self-Improve"
+
+    if _is_self_review_query(lower):
+        return _s(_self_review_text()), "Self-Review"
+    if (
+        "codebase" in lower
+        and any(p in lower for p in ("look into", "inspect", "review", "suggest", "improvement", "improvements"))
+        and any(p in lower for p in ("your", "own", "jarvis"))
+    ):
+        return _s(coder_workbench.improvement_text()), "Self-Review"
+    if _is_self_improve_safety_query(lower):
+        return _s(_self_improve_safety_reply()), "Self-Improve"
+    if _is_personal_interest_query(lower):
+        return _s(_personal_interest_reply()), "Status"
+    if _is_interview_profile_query(lower):
+        return _s(_interview_profile_reply(user_input)), "Interview"
+    if _is_locking_tradeoff_query(lower):
+        return _s(_locking_tradeoff_reply()), "Sonnet"
+    if _is_database_index_tradeoff_query(lower):
+        return _s(_database_index_tradeoff_reply()), "Sonnet"
+    if _is_meeting_captions_query(lower):
+        if any(term in lower for term in ("read", "show", "what are", "display", "copy")):
+            return _s(browser.read_meeting_captions()), "Browser"
+        return _s(browser.summarize_meeting_captions(user_input)), "Browser"
+    if _is_meeting_diagnostics_query(lower):
+        return _s(_meeting_diagnostics_reply()), "Meeting"
+    if _is_focus_meeting_query(lower):
+        return _s(browser.focus_meeting_tab()), "Browser"
+    if _is_meta_improvement_query(lower):
+        return _s(_meta_improvement_reply()), "Status"
+    if _is_performance_report_query(lower):
+        return _s(_performance_report_reply()), "Self-Eval"
+    if _is_score_command(lower):
+        return _s(_score_command_reply()), "Self-Eval"
+    if _is_reflect_command(lower):
+        return _s(_reflect_command_reply()), "Self-Eval"
+    if _is_diagnose_command(lower):
+        return _s(_diagnose_command_reply()), "Self-Eval"
+    if _is_optimize_command(lower):
+        return _s(_optimize_command_reply(user_input)), "Self-Eval"
+    if _is_status_command(lower):
+        return _s(_status_command_reply()), "Loop-Status"
+    if any(p in lower for p in ("hook status", "behavior gates", "behavior gate status", "hook summary")):
+        return _s(behavior_hooks.status_text(hours=24)), "Status"
+    if any(p in lower for p in ("/budget", "budget status", "api budget", "api rate limit", "token rate", "hourly budget", "ollama cloud budget", "local first ratio", "cloud spend")):
+        try:
+            from harness import budget as _budget_module
+            return _s(_budget_module.status_text()), "Budget"
+        except Exception as _exc:
+            return _s(f"Budget module unavailable: {_exc}"), "Budget"
+    if any(p in lower for p in ("cost policy", "routing policy", "training policy", "should we train", "should we distill")):
+        return _s(cost_policy.policy_text()), "Status"
+    if any(p in lower for p in (
+        "context budget",
+        "token budget",
+        "token optimizer",
+        "token efficient",
+        "caveman claude",
+        "rust token killer",
+        "code review graph",
+        "context mode",
+        "token saver",
+        "stop burning tokens",
+        "save context",
+        "reduce context",
+    )):
+        return _s(context_budget.policy_text(hours=24)), "Status"
+    if any(p in lower for p in (
+        "coder workbench",
+        "code workbench",
+        "code status",
+        "coder status",
+        "verify plan",
+        "verification plan",
+        "how should i verify this diff",
+        "how should i verify the code",
+        "repo grounded coding",
+    )):
+        return _s(coder_workbench.summary_text()), "Status"
+    if any(p in lower for p in (
+        "model fleet",
+        "local model fleet",
+        "local llm",
+        "local llms",
+        "download all the local",
+        "download every model",
+        "download all models",
+        "ollama models",
+        "free training lane",
+        "free training lanes",
+        "google colab",
+        "colab training",
+        "teach jarvis without",
+        "train jarvis for free",
+        "self learn",
+        "self-learning",
+        "host it for free",
+    )):
+        return _s(model_fleet.summary_text()), "Status"
+    if any(p in lower for p in (
+        "cl4r1t4s",
+        "prompt leakage",
+        "prompt leak",
+        "system prompt leak",
+        "system-prompt leak",
+        "hidden system prompt",
+        "extract system prompt",
+        "reveal system prompt",
+        "steal system prompt",
+    )):
+        return _s(security_roe.summary_text("prompt_leakage")), "Status"
+    _is_action_request = any(lower.startswith(p) for p in (
+        "remind me", "schedule ", "add a meeting", "book a", "create a meeting",
+        "set a reminder", "email ", "send ", "message ", "text ",
+    ))
+    if not _is_action_request and any(p in lower for p in (
+        "external agent pattern",
+        "agent pattern intake",
+        "what can we use from",
+        "gbrain",
+        "openmythos",
+        "multica",
+        "scrapling",
+        "decepticon",
+        "claude code best practice",
+        "claude-code-best-practice",
+        "agentic-stack",
+        "portable agent brain",
+        "portable .agent",
+        "same brain",
+    )):
+        return _s(external_agent_patterns.summary_text()), "Status"
+    if any(p in lower for p in (
+        "production readiness",
+        "production-ready",
+        "production ready",
+        "ready for production",
+        "operational ready",
+        "operationally ready",
+        "100% operational",
+        "100 percent operational",
+        "100% free",
+        "100 percent free",
+        "free regardless",
+        "unbounded free",
+        "regardless of request",
+    )):
+        return _s(production_readiness.summary_text()), "Status"
+    if any(p in lower for p in (
+        "capability parity",
+        "frontier parity",
+        "frontier capability",
+        "same capabilities",
+        "like claude",
+        "like chatgpt",
+        "like gpt",
+        "like codex",
+        "like gemini",
+        "like grok",
+        "claude gpt codex grok and gemini",
+    )):
+        return _s(capability_parity.summary_text()), "Status"
+    if any(p in lower for p in (
+        "capability eval",
+        "capability evaluation",
+        "frontier eval",
+        "frontier evaluation",
+        "golden cases",
+        "eval coverage",
+        "raise eval difficulty",
+        "harder evals",
+    )):
+        return _s(capability_evals.summary_text()), "Status"
+    if any(p in lower for p in (
+        "security roe",
+        "security rules of engagement",
+        "defensive security roe",
+        "defensive security rules",
+        "rules of engagement for security",
+        "security task template",
+        "threat model template",
+        "incident triage template",
+        "prompt injection review template",
+    )):
+        return _s(security_roe.summary_text()), "Status"
+    if any(p in lower for p in ("token usage", "usage summary", "cost analysis", "model usage", "api usage", "how many tokens", "how much are you burning")):
+        return _s(usage_tracker.summary_text(hours=24)), "Status"
+    if any(p in lower for p in ("memory status", "tiered memory status", "memory tiers", "memory summary")):
+        return _s(f"Memory status: {memory_layer.status()}"), "Status"
+    if any(p in lower for p in ("consolidate memory", "refresh memory", "rebuild memory profile", "update memory profile")):
+        result = mem.consolidate_memory()
+        return _s(f"Memory consolidation complete: {result}"), "Status"
+    # Timer
+    if _is_timer_request(lower):
+        parsed = _parse_timer(lower)
+        if parsed:
+            seconds, label = parsed
+            if _on_timer_done:
+                tools.set_timer(seconds, label, _on_timer_done)
+            return _s(f"Timer set for {label}."), "Timer"
+        return _s("I didn't catch the duration."), "Timer"
+
+    # Calendar reminder / event creation fast-path
+    # "remind me to call dad at 3pm", "remind me at 3pm to call dad",
+    # "schedule standup with fiza at 10am", "add a meeting for client review at 2pm"
+    _CAL_REMINDER_PREFIXES = (
+        "remind me to", "remind me at", "set a reminder", "set reminder",
+        "schedule ", "add a meeting", "add a reminder",
+        "create a calendar event", "create a meeting", "book a meeting", "book a call",
+    )
+    if any(lower.startswith(p) or p in lower for p in _CAL_REMINDER_PREFIXES):
+        _cal_parsed = _parse_calendar_reminder(lower)
+        if _cal_parsed:
+            _evt_title, _evt_dt = _cal_parsed
+            def _cal_create_gen(title=_evt_title, dt=_evt_dt):
+                try:
+                    result = gs.create_event(title, dt)
+                    yield result
+                except Exception:
+                    try:
+                        yield _schedule_osascript_alarm(title, dt)
+                    except Exception as e2:
+                        yield f"Couldn't set the reminder: {e2}"
+            return _cal_create_gen(), "Calendar"
+
+    # Volume / mute
+    if "mute" in lower and "unmute" not in lower:
+        return _s(tools.mute()), "System"
+    if "unmute" in lower:
+        return _s(tools.unmute()), "System"
+    if any(p in lower for p in ("set volume", "volume to", "turn volume", "volume up", "volume down")):
+        level = _parse_volume(lower)
+        return _s(tools.set_volume(level if level is not None else (80 if "up" in lower else 30))), "System"
+
+    # Brightness
+    if any(p in lower for p in ("brightness", "dim the screen", "dim screen", "brighten")):
+        level = _parse_volume(lower)
+        if level is None:
+            level = 30 if any(w in lower for w in ("dim", "low", "dark")) else 80
+        return _s(tools.set_brightness(level)), "System"
+
+    # Screenshot
+    if any(p in lower for p in ("take a screenshot", "screenshot", "capture screen")):
+        return _s(tools.take_screenshot()), "System"
+
+    # Battery status — require explicit system battery context, not "social battery" etc.
+    _battery_exact = re.search(
+        r"\b(battery\s*(level|status|percent|percentage|life)|"
+        r"how(?:'s| is)(?: my)? battery|charge\s*level|charging status|"
+        r"^battery$)\b",
+        lower,
+    )
+    if _battery_exact:
+        return _s(tools.get_battery()), "System"
+
+    # Math fast-path: "what's 20% of 150", "calculate 1234 * 56", "12 + 34"
+    _math_match = re.match(
+        r"^(?:what(?:'s| is)\s+)?(?:calculate|compute|e(?:val(?:uate)?)|solve)?\s*([\d\s\+\-\*\/\.\(\)\%\^]+[\d\)])$",
+        lower.strip()
+    )
+    if _math_match:
+        _math_result = tools.eval_math(_math_match.group(1).strip())
+        if _math_result:
+            return _s(f"That's {_math_result}."), "Math"
+    # "X% of Y" pattern
+    _pct_match = re.match(r"^(?:what(?:'s| is)\s+)?(\d+(?:\.\d+)?)\s*%\s*of\s+(\d+(?:\.\d+)?)$", lower.strip())
+    if _pct_match:
+        pct, of = float(_pct_match.group(1)), float(_pct_match.group(2))
+        result = pct * of / 100
+        result_str = str(int(result)) if result == int(result) else str(round(result, 4))
+        return _s(f"{pct}% of {int(of) if of == int(of) else of} is {result_str}."), "Math"
+
+    # Unit conversion: temperature (°F↔°C), miles↔km, lbs↔kg
+    # Pattern 1: "[convert] 26.2 miles [to|in] km"
+    _conv = re.match(
+        r"^(?:convert|what(?:'s| is)|how (?:many|much))?\s*(\d+(?:\.\d+)?)\s*"
+        r"(f(?:ahrenheit)?|c(?:elsius|entigrade)?|km?|miles?|kg|lbs?|pounds?|kilograms?)"
+        r"\s*(?:to|in)\s*(f(?:ahrenheit)?|c(?:elsius|entigrade)?|km?|miles?|kg|lbs?|pounds?|kilograms?)$",
+        lower.strip()
+    )
+    # Pattern 2: "how many km in 26.2 miles" (dst first, then number + src)
+    _conv_rev = None
+    if not _conv:
+        _conv_rev = re.match(
+            r"^how (?:many|much)\s*(f(?:ahrenheit)?|c(?:elsius|entigrade)?|km?|miles?|kg|lbs?|pounds?|kilograms?)"
+            r"\s+(?:is|are|in|to)\s+(\d+(?:\.\d+)?)\s*"
+            r"(f(?:ahrenheit)?|c(?:elsius|entigrade)?|km?|miles?|kg|lbs?|pounds?|kilograms?)$",
+            lower.strip()
+        )
+    if _conv:
+        val, src, dst = float(_conv.group(1)), _conv.group(2).lower(), _conv.group(3).lower()
+    elif _conv_rev:
+        dst, val, src = _conv_rev.group(1).lower(), float(_conv_rev.group(2)), _conv_rev.group(3).lower()
+    if _conv or _conv_rev:
+        def _normalize_unit(u):
+            if u.startswith("f"):
+                return "F"
+            if u.startswith("c"):
+                return "C"
+            if u in ("km", "k"):
+                return "km"
+            if u.startswith("m"):
+                return "miles"
+            if u.startswith("lb") or u.startswith("po"):
+                return "lbs"
+            if u.startswith("kg") or u.startswith("ki"):
+                return "kg"
+            return u
+        src_n, dst_n = _normalize_unit(src), _normalize_unit(dst)
+        conv_result = None
+        if src_n == "F" and dst_n == "C":
+            conv_result = round((val - 32) * 5 / 9, 1)
+        elif src_n == "C" and dst_n == "F":
+            conv_result = round(val * 9 / 5 + 32, 1)
+        elif src_n == "miles" and dst_n == "km":
+            conv_result = round(val * 1.60934, 2)
+        elif src_n == "km" and dst_n == "miles":
+            conv_result = round(val / 1.60934, 2)
+        elif src_n == "kg" and dst_n == "lbs":
+            conv_result = round(val * 2.20462, 2)
+        elif src_n == "lbs" and dst_n == "kg":
+            conv_result = round(val / 2.20462, 2)
+        if conv_result is not None:
+            return _s(f"{val} {src_n} = {conv_result} {dst_n}."), "Math"
+
+    # App launch fast-path: "open Spotify", "launch Terminal", "start Finder"
+    # Skip terms that overlap with other routes (email, calendar, settings, etc.)
+    if re.match(r"^(?:open|launch|start)\b", lower) and not composed_message and not email_recipient_only:
+        _app_candidate = _parse_app(user_input) or ""
+        if _app_candidate and _app_candidate.lower() not in _APP_LAUNCH_AMBIGUOUS:
+            return _s(tools.open_app(_app_candidate)), "App"
+
+    # Web search fast-path (return results, don't open browser)
+    _sq = _extract_search_query(user_input)
+    if _sq:
+        raw = _ws.search(_sq)
+        return _s(raw), "Search"
+
+    # Browser
+    if any(p in lower for p in ("browse to", "open website", "open site", "go to http", "go to www.")):
+        target = _parse_browser_target(user_input) or user_input
+        click_target = _parse_browser_click_target(user_input)
+        if click_target and (any(p in lower for p in ("summarize this page", "summarise this page", "summarize the current page", "summarise the current page", "summarize the page", "summarise the page")) or re.search(r"\b(and then|then|and)\b\s+summari[sz]e\b", lower)):
+            return _s(browser.open_click_then_summarize(target, click_target, user_input)), "Browser"
+        if click_target:
+            return _s(browser.open_then_click(target, click_target)), "Browser"
+        if any(p in lower for p in ("summarize this page", "summarise this page", "summarize the current page", "summarise the current page")) or re.search(r"\b(and then|then|and)\b\s+summari[sz]e\b", lower):
+            return _s(browser.open_then_summarize(target, user_input)), "Browser"
+        return _s(browser.open_url(target)), "Browser"
+    if any(p in lower for p in ("summarize this page", "summarise this page", "what's on this page", "what is on this page")):
+        return _s(browser.summarize_current_page(user_input)), "Browser"
+    if _is_meeting_diagnostics_query(lower):
+        return _s(_meeting_diagnostics_reply()), "Meeting"
+    if _is_focus_meeting_query(lower):
+        return _s(browser.focus_meeting_tab()), "Browser"
+    meeting_safe = _meeting_safe_mode_requested(lower)
+    if meeting_safe == "on":
+        call_privacy.set_enabled(True)
+        return _s(call_privacy.status_text()), "Meeting"
+    if meeting_safe == "off":
+        call_privacy.set_enabled(False)
+        return _s(call_privacy.status_text()), "Meeting"
+    if meeting_safe == "status":
+        return _s(call_privacy.status_text()), "Meeting"
+    if re.search(r"\bgo back\b", lower):
+        return _s(browser.go_back()), "Browser"
+    if re.search(r"\bgo forward\b", lower):
+        return _s(browser.go_forward()), "Browser"
+    if any(p in lower for p in ("reload page", "refresh page", "reload this page", "refresh this page")):
+        return _s(browser.reload_page()), "Browser"
+
+    # Lock
+    if any(p in lower for p in ("lock screen", "lock my screen")):
+        return _s(tools.lock_screen()), "System"
+
+    # Clipboard read
+    if any(p in lower for p in ("what's in my clipboard", "read my clipboard", "what did i copy")):
+        return _s(terminal.get_clipboard()), "Clipboard"
+
+    # Clipboard write: "copy that", "copy that to clipboard", "copy last response"
+    _COPY_TRIGGERS = (
+        "copy that", "copy it", "copy last response", "copy that to clipboard",
+        "copy to clipboard", "put that in my clipboard", "copy the last response",
+    )
+    if any(lower.strip() == t or lower.strip().startswith(t) for t in _COPY_TRIGGERS):
+        text_to_copy = _last_assistant_reply or ""
+        if text_to_copy:
+            return _s(terminal.set_clipboard(text_to_copy)), "Clipboard"
+        return _s("Nothing to copy — I haven't said anything yet."), "Clipboard"
+
+    # Shell command — fast path so local model doesn't hallucinate instead of executing
+    _shell_match = re.match(
+        r"(?:run|execute|shell|terminal|run the command|execute the command)\s*[:\-]?\s*(.+)",
+        lower, re.IGNORECASE
+    )
+    if _shell_match:
+        _raw_cmd = user_input[_shell_match.start(1):].strip().strip("\"'`")
+        if _raw_cmd and not re.search(r"\b(if|when|how|should|could|would|can you)\b", _raw_cmd):
+            _admin = any(kw in _raw_cmd.lower() for kw in ("sudo", "admin", "root", "chown", "chmod"))
+            _output = terminal.run_admin_command(_raw_cmd) if _admin else terminal.run_command(_raw_cmd)
+            return format_with_mini(
+                f"User ran: '{_raw_cmd}'. Output:\n{_output}\nReport the output in one spoken sentence.",
+                skill_id=None, tool="terminal", extra_system=modifier_system, ground_query=user_input,
+            ), "Terminal"
+
+    # Self-improve fast paths
+    if any(p in lower for p in ("restore backup", "undo last change", "revert")):
+        backups = si.list_backups()
+        if not backups:
+            return _s("No backups found."), "Self-Improve"
+        result = si.restore_backup(backups[0])
+        return _s(result), "Self-Improve"
+
+    if any(p in lower for p in ("restart yourself", "restart jarvis", "reload yourself",
+                                "apply changes", "hit your restart", "do a restart")):
+        def _do_restart():
+            import time
+            time.sleep(0.8)  # let the TTS finish speaking
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        threading.Thread(target=_do_restart, daemon=True).start()
+        return _s("Restarting now."), "Self-Improve"
+
+    # Local vault
+    if any(p in lower for p in ("train local model", "train local models", "improve local model", "improve local models", "tune local model", "distill local model", "distill local examples", "export training dataset", "export local training data", "build local modelfile", "fine tune handoff", "axolotl", "unsloth", "lora config", "preference export", "preference pairs", "reinforcement learning", "reinforced learning", "preference rl", "rl colab", "dpo handoff", "rl handoff", "evaluate local model", "eval local model", "promote local model", "promote adapter", "local eval status", "local model status", "local improvement status", "model improvement status", "continuous improvement status", "local improvement dry run", "automate local model", "local model autopilot", "local model cycle", "beta test jarvis", "run local beta", "beta test local model", "beta test engineering", "run engineering beta", "coach local model", "coach engineering model", "benchmark local model", "benchmark local models", "compare local models", "local model benchmark", "best local model for apple silicon")):
+        if any(p in lower for p in ("local improvement dry run",)):
+            return _s(str(local_improvement.default_pipeline().dry_run())), "Local Model"
+        if any(p in lower for p in ("local improvement status", "model improvement status", "continuous improvement status")):
+            return _s(str(local_improvement.status())), "Local Model"
+        if any(p in lower for p in ("local eval status", "local model status")):
+            return _s(f"Local training status: {local_training.status()}. Local eval status: {local_model_eval.status()}. Local automation status: {local_model_automation.status()}. Local beta status: {local_beta.status()}"), "Local Model"
+        if any(p in lower for p in ("beta test jarvis", "run local beta", "beta test local model")):
+            return _s(_start_local_beta_background()), "Local Model"
+        if any(p in lower for p in ("beta test engineering", "run engineering beta")):
+            return _s(_start_local_beta_background(suite="engineering")), "Local Model"
+        if "coach local model" in lower:
+            return _s(_start_local_beta_background(build_training_pack=True)), "Local Model"
+        if "coach engineering model" in lower:
+            return _s(_start_local_beta_background(suite="engineering", build_training_pack=True)), "Local Model"
+        if any(p in lower for p in ("automate local model", "local model autopilot", "local model cycle")):
+            return _s(local_model_automation.result_text(local_model_automation.run_cycle())), "Local Model"
+        if any(p in lower for p in ("benchmark local model", "benchmark local models", "compare local models", "local model benchmark")):
+            return _s(local_model_benchmark.result_text(local_model_benchmark.run_benchmark())), "Local Model"
+        if "best local model for apple silicon" in lower:
+            return _s(local_model_benchmark.recommendation_text()), "Local Model"
+        if any(p in lower for p in ("promote local model", "promote adapter")):
+            return _s(local_model_eval.result_text(local_model_eval.promote_candidate())), "Local Model"
+        if any(p in lower for p in ("evaluate local model", "eval local model")):
+            candidate = ""
+            model_match = re.search(r"\b(?:evaluate|eval)\s+(?:local\s+)?model\s+([a-z0-9._:-]+)", lower)
+            if model_match:
+                candidate = model_match.group(1)
+            candidate = candidate or "jarvis-local"
+            return _s(local_model_eval.result_text(local_model_eval.run_eval(candidate_model=candidate))), "Local Model"
+        if any(p in lower for p in ("fine tune handoff", "axolotl", "unsloth", "lora config")):
+            return _s(local_training.result_text(local_training.build_finetune_handoff())), "Local Model"
+        if any(p in lower for p in ("preference export", "preference pairs")):
+            return _s(local_training.result_text(local_training.export_preference_dataset())), "Local Model"
+        if any(p in lower for p in ("reinforcement learning", "reinforced learning", "preference rl", "rl colab", "dpo handoff", "rl handoff")):
+            return _s(local_training.result_text(local_training.build_colab_preference_handoff())), "Local Model"
+        if "distill" in lower:
+            return _s(local_training.result_text(local_training.distill_failures())), "Local Model"
+        if "export" in lower:
+            return _s(local_training.result_text(local_training.export_sft_dataset())), "Local Model"
+        if "modelfile" in lower:
+            return _s(local_training.result_text(local_training.build_modelfile())), "Local Model"
+        if any(p in lower for p in ("pipeline", "run it", "full run", "full pipeline", "fine tune")):
+            return _s(local_training.result_text(local_training.build_training_pack())), "Local Model"
+        export_result = local_training.export_sft_dataset()
+        modelfile_result = local_training.build_modelfile()
+        return _s(
+            f"{local_training.result_text(export_result)} "
+            f"{local_training.result_text(modelfile_result)} "
+            "If you want higher local quality on the failure cases, run a distillation pass next."
+        ), "Local Model"
+
+    if _is_skill_proposal_request(lower):
+        result = specialized_agents.run(user_input, roles=["skill_builder", "reviewer"])
+        return _s(specialized_agents.result_text(result)), "Specialized Agent"
+
+    if re.search(r"\b(create|generate|make|build|promote)\b.*\bskill\b", lower):
+        if any(p in lower for p in ("promote", "failure", "failures", "eval")):
+            return _s(skill_factory.result_text(skill_factory.promote_failures())), "Skill"
+        topic = _parse_skill_topic(user_input)
+        if topic:
+            return _s(skill_factory.result_text(skill_factory.create_skill_from_vault(topic))), "Skill"
+        return _s("Tell me what topic you want the skill to cover."), "Skill"
+
+    background_vault_task = _parse_background_vault_task(user_input)
+    if background_vault_task:
+        import task_runtime
+
+        task = task_runtime.submit_task(
+            background_vault_task,
+            kind="vault",
+            source="chat_background_vault",
+            meta={"requested_via": "router", "task_lane": "vault"},
+        )
+        vault_capture.add_agent_inbox_item(background_vault_task)
+        return _s(
+            f"Queued background vault task {task['id']} for the knowledge-vault agent and added it to [[92 Agent Inbox]]."
+        ), "Tasks"
+
+    # ── Background task status fast-path ─────────────────────────────────────
+    _TASK_STATUS_TRIGGERS = (
+        "what's the status of background tasks",
+        "what is the status of background tasks",
+        "background task status",
+        "status of my tasks",
+        "task queue status",
+        "what tasks are running",
+        "what tasks are in progress",
+        "show background tasks",
+        "list background tasks",
+        "any background tasks",
+        "tasks running",
+    )
+    if any(t in lower for t in _TASK_STATUS_TRIGGERS):
+        import task_runtime as _tr
+        tasks = _tr.list_tasks(limit=10)
+        if not tasks:
+            return _s("No background tasks in the queue."), "Tasks"
+        lines = []
+        for t in tasks:
+            tid = t.get("id", "?")[:8]
+            st = t.get("status", "?")
+            desc = (t.get("description") or t.get("kind") or "task")[:60]
+            lines.append(f"• [{tid}] {st}: {desc}")
+        return _s("Background tasks:\n" + "\n".join(lines)), "Tasks"
+
+    # ── Screen vision fast-path ───────────────────────────────────────────────
+    # Routes directly to camera.screenshot_and_describe() — local llava first,
+    # OCR+local-LLM second — without touching the cloud orchestrator.
+    _SCREEN_TRIGGERS = (
+        "what's on my screen", "what is on my screen",
+        "analyze my screen", "analyse my screen",
+        "what do you see", "what can you see",
+        "scan my screen", "look at my screen", "read my screen",
+        "what's this", "what is this on screen",
+        "describe my screen", "describe the screen",
+        "what does this say", "read this for me",
+        "what's this error", "what is this error",
+        "help me with what's on my screen",
+        "explain what's on my screen",
+        "what am i looking at",
+        "check my screen",
+    )
+    if any(t in lower for t in _SCREEN_TRIGGERS):
+        def _screen_gen(prompt=user_input):
+            try:
+                result = camera.screenshot_and_describe(prompt)
+                yield result or "I could not read your screen. Check Screen Recording permission in System Settings > Privacy & Security."
+            except Exception as e:
+                yield f"Screen capture failed: {e}. Check Screen Recording permission in System Settings."
+        return _screen_gen(), "Vision"
+
+    # ── Focus advisor fast-path ───────────────────────────────────────────────
+    # "what should i work on", "what's my priority", "what do i focus on today"
+    # Synthesises calendar + tasks + vault into a ranked focus recommendation.
+    _FOCUS_TRIGGERS = (
+        "what should i work on", "what should i do", "what's my priority",
+        "what are my priorities", "what's most important", "what to work on",
+        "where should i focus", "what should i focus on",
+        "what do i focus on today", "what's the plan", "what's next for me",
+        "help me prioritise", "help me prioritize", "prioritise my day",
+        "prioritize my day", "what's the highest priority", "top priority",
+        "what's the most important thing", "what needs to happen today",
+        "what should i tackle", "what am i missing", "what have i been neglecting",
+    )
+    if any(t in lower for t in _FOCUS_TRIGGERS):
+        def _focus_gen():
+            yield _jagents.focus_advisor()
+        return _focus_gen(), "Jarvis"
+
+    # ── Health check fast-path ────────────────────────────────────────────────
+    _HEALTH_TRIGGERS = (
+        "health check", "system health", "system status", "are you working",
+        "are all systems", "diagnostic", "self check", "self-check",
+        "what's broken", "anything down", "check your systems",
+        "run diagnostics", "status check",
+    )
+    if any(t in lower for t in _HEALTH_TRIGGERS):
+        def _health_gen():
+            yield _jhealth.spoken_summary(force=True)
+        return _health_gen(), "Jarvis"
+
+    # ── Multi-step executor fast-path ─────────────────────────────────────────
+    # "message dad and also add a task to call him tomorrow"
+    # "do X and then Y", "take care of X and Y", "handle X then Y"
+    _EXEC_EXPLICIT_TRIGGERS = (
+        "take care of", "handle this:", "execute this:", "do this for me:",
+        "carry out:", "go ahead and", "do the following:",
+    )
+    _exec_explicit = any(t in lower for t in _EXEC_EXPLICIT_TRIGGERS)
+    _exec_compound = _jexec.is_multi_step(user_input)
+    if _exec_explicit or _exec_compound:
+        # Strip trigger phrases so the executor gets a clean goal string
+        _exec_goal = user_input
+        for _trigger in _EXEC_EXPLICIT_TRIGGERS:
+            if _trigger in lower:
+                _exec_goal = user_input[lower.index(_trigger) + len(_trigger):].strip()
+                break
+        if _exec_goal:
+            def _exec_gen(goal=_exec_goal):
+                yield _jexec.run(goal)
+            return _exec_gen(), "Jarvis"
+
+    # ── Iron Man Jarvis: proactive briefings and parallel agents ────────────────
+    # "brief me" / "morning briefing" / "give me an update" / "what's my status"
+    _BRIEFING_TRIGGERS = (
+        "brief me", "briefing", "morning brief", "morning update",
+        "what's my status", "what is my status", "give me an update",
+        "what do i have today", "what's on today", "daily brief",
+        "status update", "rundown", "run me through",
+    )
+    _ATTENTION_TRIGGERS = (
+        "what needs my attention", "what requires my attention",
+        "anything urgent", "anything important", "what's urgent",
+        "what's blocking", "escalations", "priority items",
+        "what should i focus on", "what do i need to handle",
+    )
+    _MEM0_STATUS_TRIGGERS = (
+        "mem0 status", "memory status", "how many memories", "what do you remember",
+        "episodic memory", "what have you learned", "memory count",
+    )
+    _RESEARCH_AGENT_TRIGGERS = (
+        "run agents on", "research agent", "parallel research",
+        "agents on", "have agents look at", "agents find",
+    )
+    if any(t in lower for t in _BRIEFING_TRIGGERS):
+        def _briefing_gen():
+            yield _jagents.run_briefing()
+        return _briefing_gen(), "Jarvis"
+    if any(t in lower for t in _ATTENTION_TRIGGERS):
+        def _attention_gen():
+            yield _jagents.escalation_summary()
+        return _attention_gen(), "Jarvis"
+    _WEEK_TRIGGERS = (
+        "this week", "week ahead", "coming up this week", "what's this week",
+        "what do i have this week", "week overview", "weekly overview",
+        "what's coming up", "coming up next", "next seven days", "next 7 days",
+    )
+    if any(t in lower for t in _WEEK_TRIGGERS):
+        def _week_gen():
+            yield _jagents.week_ahead()
+        return _week_gen(), "Jarvis"
+    _MEETING_PREP_TRIGGERS = (
+        "prep me for my meeting", "prep for my meeting", "meeting prep",
+        "prepare me for", "what's my next meeting", "who am i meeting",
+        "meeting brief", "next meeting", "prep me for", "before my meeting",
+        "about my meeting", "what's the meeting about",
+    )
+    if any(t in lower for t in _MEETING_PREP_TRIGGERS):
+        def _meeting_prep_gen():
+            yield _jagents.meeting_prep()
+        return _meeting_prep_gen(), "Jarvis"
+    # ── Proactive watcher status / control ──────────────────────────────────────
+    # ── Daily note fast-path ──────────────────────────────────────────────────
+    _DAILY_NOTE_TRIGGERS = (
+        "create daily note", "write daily note", "today's note",
+        "make a daily note", "create today's note", "open daily note",
+        "set up today", "start today's note", "write today's plan",
+        "create my daily plan", "create my daily note",
+    )
+    if any(t in lower for t in _DAILY_NOTE_TRIGGERS):
+        def _daily_note_gen():
+            try:
+                brief = _jagents.run_briefing()
+                focus = _jagents.focus_advisor()
+                result = _jagents.write_daily_note(briefing_text=brief, focus_text=focus)
+                if result.get("action") == "already_exists":
+                    yield "Today's daily note already exists in the vault."
+                elif result.get("ok"):
+                    note_name = (result.get("path") or "").split("/")[-1]
+                    yield f"Daily note created: {note_name}. It's in vault/daily/ with your calendar, tasks, and focus for today."
+                else:
+                    yield "Couldn't create the daily note — check vault permissions."
+            except Exception as e:
+                yield f"Daily note creation failed: {e}"
+        return _daily_note_gen(), "Vault"
+
+    # ── Brain sync fast-path ──────────────────────────────────────────────────
+    _BRAIN_SYNC_TRIGGERS = (
+        "sync the brain", "sync my brain", "brain sync", "sync vault",
+        "refresh the brain", "refresh brain", "update the brain",
+        "check brain health", "vault health",
+    )
+    if any(t in lower for t in _BRAIN_SYNC_TRIGGERS):
+        try:
+            result = _jagents._agent_brain_sync()
+            return _s(result.get("result", "Brain sync complete.")), "Vault"
+        except Exception as e:
+            return _s(f"Brain sync failed: {e}"), "Vault"
+
+    # ── Vault task extraction fast-path ───────────────────────────────────────
+    _VAULT_TASK_TRIGGERS = (
+        "vault tasks", "vault backlog", "brain tasks", "what's in my backlog",
+        "agent inbox", "what's in the agent inbox", "show the agent inbox",
+        "open tasks in vault", "vault open tasks",
+    )
+    if any(t in lower for t in _VAULT_TASK_TRIGGERS):
+        try:
+            result = _jagents._agent_task_extractor()
+            return _s(result.get("result", "No open vault tasks.")), "Vault"
+        except Exception as e:
+            return _s(f"Task extraction failed: {e}"), "Vault"
+
+    _WATCHER_TRIGGERS = (
+        "watcher status", "watcher running", "are you watching",
+        "proactive mode", "background alerts", "are you monitoring",
+        "notification status",
+    )
+    if any(t in lower for t in _WATCHER_TRIGGERS):
+        def _watcher_status_gen():
+            w = _jwatcher.status()
+            if w["running"]:
+                last = w.get("last_escalation") or "none yet"
+                eod = w.get("eod_hour", 18)
+                brief_h = w.get("morning_brief_hour", 8)
+                yield (
+                    f"Proactive watcher is active — checking every {w['interval_sec'] // 60} minutes. "
+                    f"Morning brief at {brief_h}:00, end-of-day summary at {eod}:00. "
+                    f"Quiet hours: {w['quiet_start_hour']}:00 – {w['quiet_end_hour']}:00. "
+                    f"{w['notified_count']} alerts sent this session. "
+                    f"Last: {last}"
+                )
+            elif not w["enabled"]:
+                yield "Proactive watcher is disabled. Set JARVIS_WATCHER_ENABLED=1 to enable it."
+            else:
+                yield "Proactive watcher is not running. It starts automatically at launch."
+        return _watcher_status_gen(), "Jarvis"
+
+    if any(t in lower for t in _MEM0_STATUS_TRIGGERS):
+        def _mem0_status_gen():
+            s = _m0.status()
+            if not s["available"]:
+                yield (
+                    "Episodic memory is not yet initialized. "
+                    "Start Ollama and it will activate automatically. Run: ollama serve"
+                )
+                return
+            count = s.get("count", 0)
+            # Surface actual memories when the query is personal ("about me")
+            if "about me" in lower or "about myself" in lower or "what have you learned" in lower:
+                hits = _m0.search("Aman projects preferences background", top_k=8)
+                formatted = _m0.format_for_prompt(hits, max_chars=900)
+                if formatted:
+                    yield f"Here's what I know about you ({count} total memories):\n\n{formatted}"
+                else:
+                    yield f"{count} memories stored. I haven't learned much about you yet — keep talking to me."
+            else:
+                yield (
+                    f"Episodic memory is active — {count} memories stored locally. "
+                    f"Every session is recorded. Ask 'what do you remember about me' for a summary."
+                )
+        return _mem0_status_gen(), "Memory"
+
+    # ── mem0 search: "what do you remember about X" ──────────────────────────
+    _MEM0_SEARCH_PREFIXES = (
+        "what do you remember about",
+        "what do you know about",
+        "do you remember",
+        "recall anything about",
+        "what have i told you about",
+        "look up in memory",
+        "search your memory for",
+        "memory search",
+    )
+    for _prefix in _MEM0_SEARCH_PREFIXES:
+        if lower.startswith(_prefix):
+            _query = user_input[len(_prefix):].strip().strip("?.,!")
+            if _query:
+                def _mem0_search_gen(q=_query):
+                    hits = _m0.search(q, top_k=6)
+                    formatted = _m0.format_for_prompt(hits, max_chars=800)
+                    if formatted:
+                        yield f"Here's what I remember about {q}:\n\n{formatted}"
+                    else:
+                        yield f"I don't have anything stored about {q} yet."
+                return _mem0_search_gen(), "Memory"
+            break
+
+    for trigger in _RESEARCH_AGENT_TRIGGERS:
+        if trigger in lower:
+            topic = lower[lower.index(trigger) + len(trigger):].strip().strip(".,!?")
+            if topic:
+                def _research_gen(t=topic):
+                    yield _jagents.research_and_brief(t)
+                return _research_gen(), "Jarvis"
+            break
+
+    # ── Vault capture fast-path (write-back to Obsidian brain notes) ──────────
+    # Handles: "add task X", "save to vault: ...", "update changelog: ...",
+    #          "project update: ...", "append to [[Note]] under Heading: ...",
+    #          "read [[Note]]"
+    # Decisions and stories fall through to vault_curator for structured extraction.
+    _capture_result = vault_capture.handle_capture(user_input)
+    if _capture_result is not None:
+        return _s(_capture_result), "Vault"
+
+    if any(p in lower for p in ("search the vault", "refresh the vault", "index the vault", "build the vault wiki", "compile the wiki", "ingest source", "ingest file", "ingest repo", "ingest repository", "ingest url", "ingest notes", "add to the vault", "knowledge base", "local knowledge", "from the vault", "in the vault")):
+        if any(p in lower for p in ("ingest", "add to the vault")):
+            target = _parse_source_target(user_input) or "notes"
+            source_type = "notes" if target.lower() in {"notes", "my notes"} else ("google_drive" if ("docs.google.com" in target or "drive.google.com" in target) else "auto")
+            result = source_ingest.ingest_source(target, source_type=source_type, auto_build=True)
+            return _s(source_ingest.result_text(result)), "Knowledge"
+        if any(p in lower for p in ("build", "compile")):
+            return _s(vault.build_wiki_text()), "Knowledge"
+        if any(p in lower for p in ("refresh", "reindex", "index")):
+            data = vault.refresh_index()
+            return _s(f"Refreshed the local vault index. I indexed {data.get('doc_count', 0)} markdown documents."), "Knowledge"
+        if any(p in lower for p in ("status", "what's in", "what is in", "show")):
+            return _s(vault.status_text()), "Knowledge"
+        if any(p in lower for p in ("exact local file", "exact file", "exact local file and heading", "exact cited local file")):
+            return _s(_vault_exact_citation_summary(user_input)), "Knowledge"
+        raw = vault.search_text(user_input)
+        if any(p in lower for p in ("summarize", "summarise", "in two sentences", "briefly", "concise", "what does it say")):
+            return format_with_mini(
+                f"Summarize this local vault context in two concise spoken sentences and include the exact cited local file and heading you relied on:\n{raw}",
+                skill_id="local_knowledge",
+                tool="knowledge",
+                extra_system=modifier_system,
+                ground_query=user_input,
+            ), "Knowledge"
+        return _s(raw), "Knowledge"
+
+    # ── 2. Hardware fast-path ─────────────────────────────────────────────────
+    hw_result = _route_hardware(lower, user_input, modifier_system=modifier_system)
+    if hw_result:
+        return hw_result
+
+    # ── 3. Orchestrator dispatch ──────────────────────────────────────────────
+    return _orchestrate(
+        user_input,
+        lower,
+        modifier_system=modifier_system,
+        context=context,
+    )
+
+
+def _parse_file_request(text: str) -> tuple[str, str, str]:
+    """Parse a natural-language file request into (action, path, content).
+
+    action: 'read' | 'write' | 'list'
+    path:   expanded path string, or '' if not found
+    content: text to write (write action only), or ''
+    """
+    lower = (text or "").lower()
+    if re.search(r"\b(write|save|append|create.*file)\b", lower):
+        action = "write"
+    elif re.search(r"\b(list|ls)\b.{0,20}\b(files?|folder|dir|directory)\b"
+                   r"|\b(what(?:'s| is) in|show me)\b.{0,20}\b(folder|dir|directory)\b", lower):
+        action = "list"
+    else:
+        action = "read"
+
+    # Extract path — four strategies in priority order.
+    _EXT = r"(?:pdf|txt|md|py|json|csv|log|docx|xlsx|yaml|yml|toml|sh|rst)"
+    path = ""
+    m = (
+        # 1. Quoted: 'My Report.pdf' or "~/path/file.pdf" — any content between quotes
+        re.search(r"[\"']([^\"']+)[\"']", text)
+        # 2. ~/… ending at a known extension — lazy so it handles spaces in names
+        or re.search(r"(~/[\w\s.\-/]+?\." + _EXT + r")\b", text, re.IGNORECASE)
+        # 3. /absolute/… ending at a known extension
+        or re.search(r"(/[\w\s.\-/]+?\." + _EXT + r")\b", text, re.IGNORECASE)
+        # 4. ~/dir or /dir with no extension (for list action or extensionless files)
+        or re.search(r"(~/[\w.\-/]+|/[\w.\-/]+)", text)
+        # 5. Bare filename.ext — no directory, no spaces
+        or re.search(r"([\w.\-]+\." + _EXT + r")\b", text, re.IGNORECASE)
+    )
+    if m:
+        path = m.group(1).rstrip(".,;:")
+
+    content = ""
+    if action == "write":
+        content_match = re.search(
+            r"(?::\s*[\"']?|saying\s+[\"']?|content[:\s]+[\"']?|with[:\s]+[\"']?)(.+)$",
+            text,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if content_match:
+            content = content_match.group(1).strip().strip("\"'")
+
+    return action, path, content
+
+
+# ── Orchestrator dispatch ─────────────────────────────────────────────────────
+
+def _orchestrate(
+    user_input: str,
+    lower: str,
+    modifier_system: str = "",
+    *,
+    context: RouteContext | None = None,
+) -> tuple:
+    """Use the orchestrator to classify intent and dispatch the right tool."""
+    global _last_msg_recipient
+    from orchestrator import classify
+
+    decision = classify(user_input)
+    tool      = decision.tool
+    params    = decision.params
+    skill_id  = params.get("skill_id")
+
+    # Inject workspace snapshot for coding/terminal tools
+    if tool in ("code_task", "terminal", "self_improve"):
+        try:
+            import workspace_context as _wctx
+            ws_block = _wctx.format_for_prompt()
+            if ws_block:
+                modifier_system = (modifier_system + "\n\n" + ws_block).strip()
+        except Exception as _wctx_exc:
+            logging.debug("[Router] workspace_context failed: %s", _wctx_exc)
+
+    try:
+        audit_log("route_decision", tool=tool, confidence=decision.confidence)
+    except Exception:
+        logging.debug("[Router] audit_log route_decision failed", exc_info=True)
+    if not skill_id:
+        skill = skills.choose_skill(user_input, tool=tool)
+        if skill:
+            skill_id = skill.id
+            params["skill_id"] = skill_id
+
+    # ── Search ────────────────────────────────────────────────────────────────
+    if tool == "search":
+        query = params.get("query", user_input)
+        raw = _ws.search(query, summarise=False)
+        return format_with_mini(
+            f"Summarize these search results concisely in Jarvis voice:\n{raw}",
+            skill_id=skill_id,
+            tool=tool,
+            extra_system=modifier_system,
+            ground_query=user_input,
+        ), "Search"
+
+    # ── Local knowledge vault ────────────────────────────────────────────────
+    if tool == "knowledge":
+        action = params.get("action", "").lower() or decision.action.lower()
+        if action == "ingest":
+            target = params.get("source") or params.get("path") or params.get("url") or _parse_source_target(user_input) or "notes"
+            source_type = "notes" if str(target).lower() in {"notes", "my notes"} else ("google_drive" if ("docs.google.com" in str(target) or "drive.google.com" in str(target)) else "auto")
+            result = source_ingest.ingest_source(target, source_type=source_type, auto_build=True)
+            return _s(source_ingest.result_text(result)), "Knowledge"
+        if action in {"build", "compile"}:
+            return _s(vault.build_wiki_text()), "Knowledge"
+        if action in {"refresh", "reindex", "index"}:
+            data = vault.refresh_index()
+            return _s(f"Refreshed the local vault index. I indexed {data.get('doc_count', 0)} markdown documents."), "Knowledge"
+        if action in {"status", "show"}:
+            return _s(vault.status_text()), "Knowledge"
+
+        query = params.get("query") or params.get("topic") or user_input
+        results = vault.search(query)
+        if not results:
+            return _s(f"I didn't find anything relevant in the local vault for {query}."), "Knowledge"
+        raw = vault.search_text(query)
+        return format_with_mini(
+            f"Summarize this local vault context in Jarvis voice and stay grounded in the local files only:\n{raw}",
+            skill_id=skill_id or "local_knowledge",
+            tool="knowledge",
+            extra_system=modifier_system,
+            ground_query=user_input,
+        ), "Knowledge"
+
+    # ── Skill factory ────────────────────────────────────────────────────────
+    if tool == "skill":
+        action = params.get("action", "").lower() or decision.action.lower()
+        if action == "promote":
+            return _s(skill_factory.result_text(skill_factory.promote_failures())), "Skill"
+
+        topic = params.get("topic") or params.get("query") or _parse_skill_topic(user_input)
+        if not topic:
+            return _s("Tell me the topic you want me to turn into a reusable skill."), "Skill"
+        result = skill_factory.create_skill_from_vault(topic)
+        return _s(skill_factory.result_text(result)), "Skill"
+
+    # ── Local model training ────────────────────────────────────────────────
+    if tool == "local_model":
+        action = params.get("action", "").lower() or decision.action.lower()
+        if action == "distill":
+            result = local_training.distill_failures()
+            return _s(local_training.result_text(result)), "Local Model"
+        if action == "export":
+            result = local_training.export_sft_dataset()
+            return _s(local_training.result_text(result)), "Local Model"
+        if action == "modelfile":
+            result = local_training.build_modelfile()
+            return _s(local_training.result_text(result)), "Local Model"
+        if action in {"handoff", "lora"}:
+            result = local_training.build_finetune_handoff()
+            return _s(local_training.result_text(result)), "Local Model"
+        if action in {"preferences", "preference", "rl_export", "dpo_export"}:
+            result = local_training.export_preference_dataset()
+            return _s(local_training.result_text(result)), "Local Model"
+        if action in {"rl", "dpo", "preference_rl", "rl_handoff"}:
+            result = local_training.build_colab_preference_handoff()
+            return _s(local_training.result_text(result)), "Local Model"
+        if action in {"automate", "autopilot", "cycle"}:
+            result = local_model_automation.run_cycle()
+            return _s(local_model_automation.result_text(result)), "Local Model"
+        if action == "beta":
+            result = local_beta.run_beta_suite()
+            return _s(local_beta.result_text(result)), "Local Model"
+        if action == "coach":
+            result = local_beta.run_beta_suite(build_training_pack=True)
+            return _s(local_beta.result_text(result)), "Local Model"
+        if action in {"evaluate", "eval"}:
+            candidate = params.get("candidate_model") or params.get("model") or params.get("target") or "jarvis-local"
+            result = local_model_eval.run_eval(candidate_model=candidate)
+            return _s(local_model_eval.result_text(result)), "Local Model"
+        if action == "promote":
+            candidate = params.get("candidate_model") or params.get("model") or None
+            result = local_model_eval.promote_candidate(candidate_model=candidate)
+            return _s(local_model_eval.result_text(result)), "Local Model"
+        if action in {"train", "tune", "improve"}:
+            result = local_training.build_training_pack()
+            return _s(local_training.result_text(result)), "Local Model"
+        return _s(f"Local training status: {local_training.status()}. Local eval status: {local_model_eval.status()}. Local automation status: {local_model_automation.status()}. Local beta status: {local_beta.status()}"), "Local Model"
+
+    # ── Browser ───────────────────────────────────────────────────────────────
+    if tool == "browser":
+        action = params.get("action", "").lower()
+        target = (
+            params.get("url")
+            or params.get("query")
+            or params.get("target")
+            or params.get("page")
+            or _parse_browser_target(user_input)
+            or user_input
+        )
+        click_target = params.get("link_text") or params.get("text") or params.get("label") or _parse_browser_click_target(user_input) or ""
+
+        # Headless URL fetch — no browser window needed
+        _fetch_url = _extract_url(user_input)
+        if action == "fetch" or (_fetch_url and re.search(r"\b(fetch|read|get|show|load|summarize|summarise)\b", lower)):
+            url_to_fetch = _fetch_url or target
+            page_text = browser.web_fetch(url_to_fetch)
+            prompt = f"The user asked: {user_input}\n\nPage content from {url_to_fetch}:\n\n{page_text}"
+            return format_with_mini(prompt, extra_system="Summarize the page content in a clear, concise response. Answer the user's specific question if they asked one."), "Browser"
+
+        if any(term in lower for term in ("copy current page url", "copy page url", "copy page link", "send this page", "share this page")):
+            return _s(browser.copy_current_page_url()), "Browser"
+        if "caption" in action or _is_meeting_captions_query(lower):
+            if any(term in lower for term in ("read", "show", "what are", "display", "copy")):
+                return _s(browser.read_meeting_captions()), "Browser"
+            return _s(browser.summarize_meeting_captions(user_input)), "Browser"
+        if "focus" in action and any(term in lower for term in ("meeting", "meet", "zoom", "teams", "webex")):
+            return _s(browser.focus_meeting_tab()), "Browser"
+        if "back" in action:
+            return _s(browser.go_back()), "Browser"
+        if "forward" in action:
+            return _s(browser.go_forward()), "Browser"
+        if "reload" in action or "refresh" in action:
+            return _s(browser.reload_page()), "Browser"
+        if "click" in action and click_target:
+            return _s(browser.click_text(click_target)), "Browser"
+        if click_target and ("summary" in action or "summarize" in action or "summarise" in action) and target and _parse_browser_target(user_input):
+            return _s(browser.open_click_then_summarize(target, click_target, user_input)), "Browser"
+        if click_target and target and _parse_browser_target(user_input):
+            return _s(browser.open_then_click(target, click_target)), "Browser"
+        if ("summary" in action or "summarize" in action or "summarise" in action) and target and _parse_browser_target(user_input):
+            return _s(browser.open_then_summarize(target, user_input)), "Browser"
+        if "summary" in action or "summarize" in action or "summarise" in lower or "this page" in lower:
+            return _s(browser.summarize_current_page(user_input)), "Browser"
+        if "current" in action or "where am i" in lower or "what page" in lower:
+            return _s(browser.get_current_page()), "Browser"
+        return _s(browser.open_url(target)), "Browser"
+
+    # ── Deep research ─────────────────────────────────────────────────────────
+    if tool == "deep_research":
+        from research import deep_research, format_for_voice
+        query = params.get("query", user_input)
+
+        def _stream_research():
+            yield "Initiating deep research. This will take a moment, sir."
+
+        # Run research in background, return immediately
+        def _do_research():
+            result = deep_research(query, depth=2)
+            # Save to notes automatically
+            notes.add_note(f"# Research: {query}\n\n{result['report']}\n\n"
+                           f"Sources: {len(result['sources'])}")
+            return result
+
+        # Return a stream that blocks until done
+        def _blocking_stream():
+            yield f"Researching '{query}'. Reading sources now..."
+            result = _do_research()
+            voice_summary = format_for_voice(result)
+            yield " " + voice_summary
+            yield f" Full report saved to notes. {len(result['sources'])} sources cited."
+
+        return _blocking_stream(), "Deep Research"
+
+    # ── Operative agent ───────────────────────────────────────────────────────
+    if tool == "operative":
+        from operative import execute_prepared_task, prepare_task
+        task = params.get("task", user_input)
+        route_context = (context or RouteContext.desktop()).normalized()
+
+        def _operative_stream():
+            def _worker(on_progress, cancel):
+                prepared = prepare_task(
+                    task,
+                    context=route_context,
+                    cancel_event=cancel,
+                )
+                if prepared.get("status") == "approval_required":
+                    return prepared
+                result = execute_prepared_task(
+                    prepared["manifest"],
+                    on_progress=on_progress,
+                    cancel_event=cancel,
+                    context=route_context,
+                )
+                from harness.notify import notify as _notify
+
+                if result.get("ok"):
+                    _notify("Jarvis — Task Complete", result.get("summary", "")[:100])
+                else:
+                    _notify("Jarvis — Task Failed", result.get("summary", "")[:100])
+                return result
+
+            yield from _run_task_worker_stream(
+                "Preparing an exact task plan now.",
+                _worker,
+                context=route_context,
+                thread_name="Operative",
+            )
+
+        return _operative_stream(), "Operative"
+
+    # ── Code task (write + test + fix loop) ──────────────────────────────────
+    if tool == "code_task":
+        task = params.get("task", user_input)
+
+        def _code_task_stream():
+            from harness.notify import notify as _notify
+            yield "On it. Writing code and running tests locally now."
+            # Reaching this branch means the user explicitly requested a code task.
+            result = coder_workbench.fix_loop(task, execution_approved=True)
+            if result["ok"]:
+                files_list = ", ".join(result.get("files", {}).keys()) or "files"
+                yield f" Done in {result['iterations']} iteration(s). Files: {files_list}."
+                if result.get("output"):
+                    lines = result["output"].strip().splitlines()
+                    summary = "\n".join(lines[-6:]) if len(lines) > 6 else result["output"].strip()
+                    yield f"\n\nTest output:\n{summary}"
+                _notify("Jarvis — Code Task Complete", f"{files_list} — {result['iterations']} iteration(s)")
+            else:
+                yield (
+                    f" Still failing after {result['iterations']} iteration(s)."
+                    f" Last output: {result.get('output', '')[-300:]}"
+                )
+                _notify("Jarvis — Code Task Failed", f"Still failing after {result['iterations']} iteration(s)")
+
+        return _code_task_stream(), "Code Task"
+
+    # ── Specialized agents ───────────────────────────────────────────────────
+    if tool == "specialized_agent":
+        explicit_roles = params.get("roles") or []
+        result = specialized_agents.run(user_input, roles=explicit_roles or None)
+        return _s(specialized_agents.result_text(result)), "Specialized Agents"
+
+    # ── Messages / iMessage ───────────────────────────────────────────────────
+    if tool == "message":
+        recipient = params.get("recipient", params.get("to", ""))
+        body      = params.get("message",   params.get("body", params.get("text", "")))
+        # Try to pull recipient from raw input if orchestrator missed it.
+        # Use the polite-stripped version and parse properly before falling
+        # back to the limited regex — this avoids "dad to get" greedy captures.
+        if not recipient:
+            _stripped_for_orch = _strip_polite_prefix(user_input)
+            _compose_fallback = _parse_message_compose(_stripped_for_orch)
+            if _compose_fallback:
+                recipient, body = _compose_fallback
+            else:
+                # Last-resort regex: only 1-2 words, stop before "to" keyword
+                m = re.search(
+                    r"(?:text|message|send to)\s+(?:my\s+)?([A-Za-z0-9@\.]+(?:\s+[A-Za-z0-9@\.]+)?)"
+                    r"(?=\s+(?:to\b|\"|$)|\s+[A-Z]|\s*$)",
+                    _stripped_for_orch,
+                    flags=re.IGNORECASE,
+                )
+                if m:
+                    recipient = m.group(1)
+        recipient = _normalize_message_recipient(recipient)
+        if recipient and body:
+            unsafe_reply = _unsafe_message_draft_reply(body)
+            if unsafe_reply:
+                return _s(unsafe_reply), "Messages"
+            _clear_pending_recipient()
+            _set_pending_message_draft(recipient, body)
+            return _s(_message_confirmation_prompt(recipient, body)), "Messages"
+        if recipient and not body:
+            _set_pending_recipient(recipient)
+            return _s(f"What would you like to say to {recipient}?"), "Messages"
+        if body and _last_msg_recipient:
+            return _s("I need you to restate the recipient before I draft that message."), "Messages"
+        if _last_msg_recipient and _looks_like_message_status_query(lower):
+            return _s(f"I can send it now. Tell me the message content for {_last_msg_recipient}."), "Messages"
+        _set_awaiting_recipient()
+        return _s("Who would you like to message?"), "Messages"
+
+    # ── Calendar ──────────────────────────────────────────────────────────────
+    if tool == "calendar":
+        action = params.get("action", "read")
+        if action == "read":
+            try:
+                raw = gs.get_todays_events()
+                return format_with_mini(
+                    f"The user asked: {user_input}\n\nCalendar data:\n{raw}",
+                    extra_system="Summarize the calendar events concisely and directly.",
+                ), "Calendar"
+            except Exception as exc:
+                logging.warning("[Router] Calendar fetch failed: %s", exc)
+                return _s(_GOOGLE_REAUTH_MSG), "Calendar"
+        # create — fall through to chat for now
+        return smart_stream(user_input, skill_id=skill_id, tool=tool, extra_system=modifier_system)
+
+    # ── Email ─────────────────────────────────────────────────────────────────
+    if tool == "email":
+        try:
+            raw = gs.get_unread_emails()
+            return format_with_mini(
+                f"The user asked: {user_input}\n\nEmail data:\n{raw}",
+                extra_system="Summarize the emails concisely and directly.",
+            ), "Gmail"
+        except Exception as exc:
+            logging.warning("[Router] Email fetch failed: %s", exc)
+            return _s(_GOOGLE_REAUTH_MSG), "Gmail"
+
+    # ── Weather ───────────────────────────────────────────────────────────────
+    if tool == "weather":
+        location = (
+            params.get("location")
+            or params.get("city")
+            or params.get("place")
+            or _extract_weather_location(user_input)
+        )
+        return _s(tools.get_weather(location)), "Weather"
+
+    # ── Notes ─────────────────────────────────────────────────────────────────
+    if tool == "notes":
+        action = params.get("action", "")
+        if "read" in action or "show" in action or "get" in action:
+            return _s(notes.get_notes()), "Notes"
+        if "search" in action:
+            kw = params.get("keyword", "")
+            return _s(notes.search_notes(kw)), "Notes"
+        # save
+        content = params.get("content", "")
+        if content:
+            return _s(notes.add_note(content)), "Notes"
+        return _s(notes.get_notes()), "Notes"
+
+    # ── Terminal ─────────────────────────────────────────────────────────────
+    if tool == "terminal":
+        cmd = params.get("command", params.get("cmd", ""))
+        if cmd:
+            output = terminal.run_command(cmd)
+            return format_with_mini(
+                f"The user ran: '{cmd}'. Output:\n{output}\nSummarize concisely in Jarvis voice.",
+                skill_id=skill_id,
+                tool=tool,
+                extra_system=modifier_system,
+                ground_query=user_input,
+            ), "Terminal"
+        path = params.get("path", "")
+        if path:
+            content = terminal.read_file(path)
+            return format_with_mini(
+                f"Summarize this file concisely:\n{content}",
+                skill_id=skill_id,
+                tool=tool,
+                extra_system=modifier_system,
+                ground_query=user_input,
+            ), "File"
+        return smart_stream(user_input, skill_id=skill_id, tool=tool, extra_system=modifier_system)
+
+    # ── Admin shell ───────────────────────────────────────────────────────────
+    if tool == "admin":
+        cmd = params.get("command", params.get("cmd", ""))
+        if not cmd:
+            cmd = re.sub(r"\b(with admin privileges|administrator privileges|as admin|run as root|sudo)\b", "", user_input, flags=re.IGNORECASE).strip()
+        if cmd:
+            output = terminal.run_admin_command(cmd)
+            return format_with_mini(
+                f"The user requested an admin command. Command: '{cmd}'. Output:\n{output}\nSummarize this in Jarvis voice.",
+                skill_id=skill_id,
+                tool=tool,
+                extra_system=modifier_system,
+                ground_query=user_input,
+            ), "Admin"
+        return _s("Tell me the exact command you want me to run with administrator privileges."), "Admin"
+
+    # ── App ──────────────────────────────────────────────────────────────────
+    if tool == "app":
+        app_name = params.get("app", _parse_app(user_input) or "")
+        if app_name:
+            return _s(tools.open_app(app_name)), "App"
+        return smart_stream(user_input, skill_id=skill_id, tool=tool, extra_system=modifier_system)
+
+    # ── Camera / Vision ───────────────────────────────────────────────────────
+    if tool == "camera":
+        action = params.get("action", "webcam")
+        if "screen" in action or "screenshot" in action:
+            return _s(camera.screenshot_and_describe(user_input)), "Screen"
+        return _s(camera.see(user_input)), "Camera"
+
+    # ── Memory ────────────────────────────────────────────────────────────────
+    if tool == "memory":
+        action = params.get("action", "")
+        if action == "save" or lower.startswith("remember "):
+            fact = re.sub(r"^remember\s+", "", user_input, flags=re.IGNORECASE).strip()
+            mem.add_fact(fact)
+            return _s(f"Got it. I'll remember that {fact}."), "Memory"
+        if action == "forget" or lower.startswith("forget "):
+            keyword = re.sub(r"^forget\s+", "", user_input, flags=re.IGNORECASE).strip()
+            removed = mem.forget(keyword)
+            return _s("Forgotten." if removed else f"Nothing saved about {keyword}."), "Memory"
+        # briefing
+        if any(p in lower for p in ("briefing", "catch me up", "what did i miss")):
+            from briefing import build_briefing
+            return _s(build_briefing(mem.list_facts())), "Memory"
+        return smart_stream(user_input, skill_id=skill_id, tool=tool, extra_system=modifier_system)
+
+    # ── Local Artifact — self-contained interactive HTML page (local-first) ───
+    if tool == "artifact":
+        import datetime
+        import pathlib
+        from provider_priority import ask_with_priority
+
+        _ARTIFACT_SYSTEM = (
+            "You are generating a Local Artifact — a single-file, shareable HTML page generated on-device. "
+            "Rules: one .html file with all CSS inline or in <style>. You may pull a few trusted CDNs when they "
+            "add real value (Mermaid.js for diagrams, Chart.js for charts, Prism.js for syntax highlighting, "
+            "Tailwind CDN for styling); these need a network connection to render, so keep the core content "
+            "legible without them. Clean, professional, mobile-friendly design. "
+            "The output must be complete, valid HTML from <!DOCTYPE html> to </html>. "
+            "Produce production-quality output a team can open and share immediately."
+        )
+
+        def _artifact_stream():
+            yield "Building your artifact now, sir."
+            prompt = (
+                f"Create a self-contained HTML page for this request:\n\n{user_input}\n\n"
+                "Generate a complete, working single-file HTML page. Choose the right format: "
+                "Mermaid diagram for architecture/flows, Chart.js for data dashboards, "
+                "structured HTML with code blocks for walkthroughs and PR reviews, "
+                "or a clean report layout for team summaries. "
+                "Include a clear title, navigation if multi-section, and any interactive elements that add value."
+            )
+            try:
+                html = ask_with_priority(prompt, tier="strong", system_extra=_ARTIFACT_SYSTEM)
+                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                safe_name = re.sub(r"[^a-z0-9]+", "_", user_input[:30].lower()).strip("_")
+                path = pathlib.Path.home() / "Desktop" / f"jarvis_artifact_{safe_name}_{ts}.html"
+                path.write_text(html, encoding="utf-8")
+                notes.add_note(f"# Artifact: {user_input[:80]}\n\nSaved to Desktop: {path.name}")
+                yield (
+                    f" Done. Artifact saved to your Desktop as {path.name}. "
+                    "Open it in your browser to preview, then share the file with your team. "
+                    "I can also package any future diagram, dashboard, or walkthrough as a Local Artifact — just ask."
+                )
+            except Exception as exc:
+                logging.warning("[Router] Artifact generation failed: %s", exc)
+                yield " Artifact generation hit an error. Try again or ask me to build the content as plain text first."
+
+        return _artifact_stream(), "Local Artifact"
+
+    # ── Self-improve ──────────────────────────────────────────────────────────
+    if tool == "self_improve":
+        action = params.get("action", "improve")
+        if action == "restart":
+            return _s("Restarting now to apply the latest changes."), "Self-Improve"
+        if action == "review":
+            area = params.get("area") or params.get("target") or None
+            return _s(_self_review_text(area=area)), "Self-Review"
+        if action == "analyze":
+            area = params.get("area", None)
+            analysis = si.analyze_weakness(area)
+            return _s(analysis), "Self-Improve"
+        # improve — phase 1: generate and show diff, wait for approval
+        target = params.get("target", params.get("area", ""))
+        instruction = target if target else None
+        gate = perms.can_self_improve(target or user_input)
+        if not gate["ok"]:
+            return _s(gate["reason"]), "Self-Improve"
+
+        def _prepare_stream():
+            yield "Analyzing my code and generating the improvement. This will take a moment..."
+            pending = si.prepare_improvement(instruction=instruction)
+            if pending.get("error"):
+                yield f" Could not prepare improvement: {pending['error']}"
+                return
+            # Stash pending state so apply action can retrieve it
+            _pending_improvements[0] = pending
+            diff_lines = [
+                ln for ln in pending["diff"].splitlines()
+                if ln.startswith(("+", "-")) and not ln.startswith(("+++", "---"))
+            ]
+            preview = "\n".join(diff_lines[:30])
+            if len(diff_lines) > 30:
+                preview += f"\n... and {len(diff_lines) - 30} more lines"
+            yield (
+                f" Ready to improve {pending['file']}. "
+                f"{pending['lines_changed']} lines would change. "
+                f"Here is a preview of the diff:\n{preview}\n"
+                f"Say 'apply the improvement' or 'yes go ahead' to apply, "
+                f"or 'cancel' to discard."
+            )
+
+        return _prepare_stream(), "Self-Improve"
+
+    if tool == "self_improve_apply":
+        pending = _pending_improvements[0]
+        if not pending:
+            return _s("No pending improvement to apply. Ask me to improve myself first."), "Self-Improve"
+
+        def _apply_stream():
+            yield f"Applying the improvement to {pending['file']}..."
+            result = si.apply_pending_improvement(pending)
+            _pending_improvements[0] = None
+            if result.get("error"):
+                yield f" Could not apply: {result['error']}"
+            else:
+                yield (
+                    f" Done. Applied improvement to {result['file']}. "
+                    f"{result['lines_changed']} lines changed. "
+                    f"Backup saved as {result['backup']}. "
+                    f"Say 'restart yourself' to reload the updated code."
+                )
+
+        return _apply_stream(), "Self-Improve"
+
+    if tool == "self_improve_cancel":
+        had_pending = _pending_improvements[0] is not None
+        _pending_improvements[0] = None
+        msg_text = "Improvement discarded." if had_pending else "No pending improvement to cancel."
+        return _s(msg_text), "Self-Improve"
+
+    # ── Meeting ───────────────────────────────────────────────────────────────
+    if tool == "meeting":
+        import meeting_listener as ml
+        return _s(ml.auto_configure_blackhole()), "Meeting"
+
+    # ── File ──────────────────────────────────────────────────────────────────
+    if tool == "file":
+        action = params.get("action", "")
+        path = params.get("path", "")
+        content = params.get("content", "")
+
+        if not path:
+            _parsed_action, path, _parsed_content = _parse_file_request(user_input)
+            if not action:
+                action = _parsed_action
+            if not content:
+                content = _parsed_content
+
+        if not path:
+            return _s("What file path would you like me to work with?"), "File"
+
+        if not action:
+            action = "read"
+
+        if action == "list":
+            dir_result = terminal.list_directory(path)
+            return format_with_mini(
+                f"Directory listing for {path}:\n{dir_result}\nDescribe what files are here briefly.",
+                skill_id=skill_id,
+                tool=tool,
+                extra_system=modifier_system,
+                ground_query=user_input,
+            ), "File"
+
+        if action == "write":
+            if not content:
+                return _s(f"What should I write to {path}?"), "File"
+            write_result = terminal.write_file(path, content)
+            return _s(write_result), "File"
+
+        # read (default)
+        raw = terminal.read_file(path)
+        summarize = any(
+            p in lower
+            for p in ("summarize", "summarise", "what does it say", "tell me about",
+                      "brief", "overview", "explain", "describe")
+        )
+        path_expanded = os.path.expanduser(path)
+        if summarize or path_expanded.lower().endswith(".pdf"):
+            return format_with_mini(
+                f"The user asked: {user_input!r}\n\nFile contents ({path}):\n{raw}"
+                "\n\nSummarize clearly and concisely.",
+                skill_id=skill_id,
+                tool=tool,
+                extra_system=modifier_system,
+                ground_query=user_input,
+            ), "File"
+        return _s(raw), "File"
+
+    # ── File/folder watcher ───────────────────────────────────────────────────
+    if tool == "watch":
+        from harness import watcher as _watcher
+        action = params.get("action", decision.action).lower()
+
+        if action == "unwatch":
+            target = params.get("path", "") or _extract_url(user_input) or ""
+            if not target:
+                # "unwatch" with no path → stop all
+                _, path_str, _ = _parse_file_request(user_input)
+                target = path_str
+            if target:
+                return _s(_watcher.unwatch(target)), "Watcher"
+            n = _watcher.unwatch_all()
+            return _s(f"Stopped {n} active watch{'es' if n != 1 else ''}."), "Watcher"
+
+        if action in ("list", "status"):
+            paths = _watcher.list_watches()
+            if not paths:
+                return _s("No active watches."), "Watcher"
+            return _s("Watching:\n" + "\n".join(f"  • {p}" for p in paths)), "Watcher"
+
+        # watch action — extract path from command
+        _, path_str, _ = _parse_file_request(user_input)
+        if not path_str:
+            # try raw ~/... or /... pattern without extension
+            m = re.search(r"(~/[\w.\-/]+|/[\w.\-/]+)", user_input)
+            path_str = m.group(1) if m else ""
+        if not path_str:
+            return _s("Please specify a path to watch, e.g. /watch ~/Desktop/report.md"), "Watcher"
+        return _s(_watcher.watch(path_str)), "Watcher"
+
+    # ── Chat fallback ─────────────────────────────────────────────────────────
+    audit_log("route_decision", tool=tool or "chat", confidence=None)
+    try:
+        result = smart_stream(user_input, skill_id=skill_id, tool=tool, extra_system=modifier_system)
+        return result
+    except Exception as exc:
+        audit_log("model_call", tool=tool or "chat", success=False, error=str(exc))
+        logging.exception("[Router] smart_stream failed")
+        raise
+
+
+def record_turn(user_input: str, assistant_reply: str) -> None:
+    """
+    Fire-and-forget mem0 write after a completed conversation turn.
+
+    Call this from the UI / voice layer once the full assistant reply is
+    collected.  It runs in a background thread so it never blocks the UX.
+
+    The text Jarvis stores is compacted first so mem0 can extract useful
+    context without preserving full tool dumps such as web-search result pages.
+    """
+    global _last_assistant_reply
+    if not user_input or not assistant_reply:
+        return
+    safe_user_input = redact_approval_ids(user_input)
+    safe_assistant_reply = redact_approval_ids(assistant_reply)
+    _last_assistant_reply = safe_assistant_reply.strip()
+    turn = _mem0_turn_text(safe_user_input, safe_assistant_reply)
+    _m0.add_async(turn)
+    # Background fact extraction — silently captures tasks/decisions/preferences
+    try:
+        import jarvis_extractor as _jex
+        _jex.extract_async(safe_user_input, safe_assistant_reply)
+    except Exception:
+        logging.debug("[Router] background fact extraction (jarvis_extractor) failed to start", exc_info=True)
+
+
+# ── Hardware routing ──────────────────────────────────────────────────────────
+
+_HW_ROUTES = [
+    (["fire web shooter", "fire shooter", "activate shooter", "web shooter", "shoot"],
+     "web_shooter", "fire", {}),
+    (["reload", "reload shooter"], "web_shooter", "reload", {}),
+    (["arm retract", "retract arm", "pull back"], "arm", "retract", {}),
+    (["arm extend", "extend arm", "reach out"],   "arm", "extend",  {}),
+    (["activate relay", "turn on relay", "relay on"],    "relay_1", "on",  {}),
+    (["deactivate relay", "turn off relay", "relay off"], "relay_1", "off", {}),
+]
+
+
+def _route_hardware(lower: str, user_input: str, modifier_system: str = ""):
+    devices = hw.list_devices()
+
+    if any(p in lower for p in [
+        "pair my tv", "generate a pairing pin", "give me a pairing code", "pairing code", "pair a tv", "pair tv"
+    ]):
+        import api
+        import terminal
+        try:
+            pin = api.create_pairing_pin()
+            terminal.set_clipboard(pin)
+            spoken_digits = " ".join(list(pin))
+            return _s(
+                f"Your temporary pairing code is {spoken_digits}. "
+                f"I have copied the PIN {pin} to your clipboard, sir. Enter it in your TV or remote device browser within the next five minutes."
+            ), "Hardware"
+        except Exception as e:
+            return _s(f"I encountered an error generating a pairing PIN, sir: {str(e)}"), "Hardware"
+
+    if any(p in lower for p in [
+        "bridge status", "jarvis bridge", "lan status", "same wifi bridge", "local network bridge",
+        "what is my bridge url", "what's my bridge url", "copy bridge url", "show bridge url"
+    ]):
+        snap = runtime_state.snapshot()
+        bridge_host = str(snap.get("api_host") or os.getenv("JARVIS_API_HOST", "127.0.0.1")).strip() or "127.0.0.1"
+        try:
+            bridge_port = int(snap.get("api_port") or os.getenv("JARVIS_API_PORT", "8765"))
+        except (TypeError, ValueError):
+            bridge_port = 8765
+        bridge = hw.bridge_status(api_host=bridge_host, api_port=bridge_port)
+        urls = bridge.get("urls", [])
+        ips = bridge.get("ips", [])
+        local_only = bridge.get("local_only", True)
+        primary = bridge.get("primary_url") or (urls[0] if urls else "http://127.0.0.1:8765")
+        token = os.getenv("JARVIS_API_TOKEN", "")
+        if token:
+            primary_with_token = f"{primary}/#token={token}"
+        else:
+            primary_with_token = primary
+        
+        import terminal
+        terminal.set_clipboard(primary_with_token)
+        
+        mode = "local-only" if local_only else "LAN-enabled"
+        ip_text = f" Local IPs: {', '.join(ips)}." if ips else ""
+        return _s(f"Bridge status: {mode}. I have copied your secure mobile pairing URL to the clipboard: {primary_with_token}.{ip_text}"), "Hardware"
+
+    if any(p in lower for p in [
+        "open bluetooth settings", "bluetooth settings", "pair a device",
+        "open sound settings", "sound settings", "airplay settings",
+        "open displays settings", "displays settings", "open display settings"
+    ]):
+        if "bluetooth" in lower:
+            return _s(hw.open_system_settings("bluetooth")), "Hardware"
+        if "sound" in lower or "airplay" in lower:
+            return _s(hw.open_system_settings("sound")), "Hardware"
+        if "display" in lower or "displays" in lower:
+            return _s(hw.open_system_settings("displays")), "Hardware"
+
+    if any(p in lower for p in [
+        "nearby devices", "nearby device", "what devices are near me", "discover devices",
+        "bluetooth devices", "airplay devices", "same wifi devices", "nearby airplay",
+        "network devices near me", "what can you connect to"
+    ]):
+        snapshot = hw.discover_nearby(timeout=1.5)
+        bt = snapshot.get("bluetooth", {})
+        net = snapshot.get("network", {}).get("services", {})
+        connected_bt = bt.get("connected", [])
+        known_bt = bt.get("known", [])
+        airplay = net.get("airplay", [])
+        companion = net.get("companion", [])
+        googlecast = net.get("googlecast", [])
+
+        bt_connected_names = ", ".join(d.get("name", "unknown") for d in connected_bt[:4]) or "none"
+        bt_known_names = ", ".join(d.get("name", "unknown") for d in known_bt[:5]) or "none"
+        airplay_names = ", ".join(d.get("name", "unknown") for d in airplay[:5]) or "none"
+        companion_names = ", ".join(d.get("name", "unknown") for d in companion[:5]) or "none"
+        cast_names = ", ".join(d.get("name", "unknown") for d in googlecast[:5]) or "none"
+
+        summary = (
+            f"Bluetooth connected: {bt_connected_names}. "
+            f"Known Bluetooth devices: {bt_known_names}. "
+            f"AirPlay targets: {airplay_names}. "
+            f"Nearby companion devices: {companion_names}. "
+            f"Google Cast targets: {cast_names}."
+        )
+        return format_with_mini(
+            f"Report this nearby device snapshot in Jarvis voice, naturally and concisely: {summary}",
+            extra_system=modifier_system,
+            ground_query=user_input,
+        ), "Hardware"
+
+    if any(p in lower for p in ["hardware status", "device status", "check devices", "show hardware"]):
+        s = hw.status()
+        if not s or "No hardware" in s:
+            return _s("No hardware devices registered, sir."), "Hardware"
+        return format_with_mini(
+            f"Report this hardware status in Jarvis voice: {s}",
+            extra_system=modifier_system,
+            ground_query=user_input,
+        ), "Hardware"
+
+    if any(p in lower for p in ["scan ports", "find devices", "detect hardware"]):
+        ports = hw.scan_serial_ports()
+        return _s(f"Found {len(ports)} port{'s' if len(ports)>1 else ''}: {', '.join(ports)}." if ports
+                  else "No serial ports detected."), "Hardware"
+
+    if any(p in lower for p in ["emergency stop", "abort all", "halt all", "stop all devices"]):
+        results = hw.command_all("stop")
+        ok = sum(1 for r in results.values() if r.ok)
+        return _s(f"Emergency stop sent to {len(results)} devices. {ok} confirmed."), "Hardware"
+
+    for device in devices:
+        dname = device.name.lower().replace("_", " ")
+        cmd_match = re.search(
+            rf"(?:fire|activate|trigger|run|execute|use|engage)\s+{re.escape(dname)}(?:\s+(\w+))?|"
+            rf"{re.escape(dname)}\s+(\w+)|"
+            rf"(?:turn\s+(?:on|off))\s+{re.escape(dname)}",
+            lower
+        )
+        if cmd_match:
+            cmd = (cmd_match.group(1) or cmd_match.group(2) or "trigger").strip()
+            if "turn off" in lower or "deactivate" in lower:
+                cmd = "off"
+            elif "turn on" in lower or "activate" in lower and not cmd_match.group(1):
+                cmd = "on"
+            result = hw.command(device.name, cmd)
+            msg = str(result)
+            return format_with_mini(
+                f"Report this in Jarvis voice (1 sentence): {msg}",
+                extra_system=modifier_system,
+                ground_query=user_input,
+            ), "Hardware"
+
+    for triggers, device_name, cmd, extra_params in _HW_ROUTES:
+        if any(t in lower for t in triggers):
+            dur = re.search(r"(\d+)\s*ms", lower)
+            p = dict(extra_params, duration=int(dur.group(1))) if dur else extra_params
+            result = hw.command(device_name, cmd, **p)
+            return format_with_mini(
+                f"Report in Jarvis voice (1 sentence): {result}",
+                extra_system=modifier_system,
+                ground_query=user_input,
+            ), "Hardware"
+
+    return None

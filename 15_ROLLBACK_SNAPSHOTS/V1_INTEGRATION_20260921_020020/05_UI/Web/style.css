@@ -1,0 +1,279 @@
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: Arial, Helvetica, sans-serif;
+    background: #080a0f;
+    color: #e8edf5;
+}
+
+.app {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.topbar {
+    height: 72px;
+    border-bottom: 1px solid #202632;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 28px;
+    background: #0c0f15;
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.logo {
+    width: 42px;
+    height: 42px;
+    border: 1px solid #586273;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    font-weight: bold;
+}
+
+.brand h1 {
+    font-size: 20px;
+    letter-spacing: 3px;
+}
+
+.brand span {
+    font-size: 10px;
+    color: #788394;
+    letter-spacing: 1px;
+}
+
+.system-state {
+    font-size: 11px;
+    letter-spacing: 1px;
+    color: #aab3c2;
+}
+
+.dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #8bd450;
+    margin-right: 7px;
+}
+
+.layout {
+    flex: 1;
+    display: flex;
+}
+
+.sidebar {
+    width: 220px;
+    border-right: 1px solid #202632;
+    background: #0b0e14;
+    padding: 24px 14px;
+}
+
+.nav-title {
+    font-size: 10px;
+    color: #667181;
+    letter-spacing: 2px;
+    margin: 0 12px 12px;
+}
+
+.security-title {
+    margin-top: 30px;
+}
+
+.nav {
+    width: 100%;
+    background: transparent;
+    border: 0;
+    color: #8f99a9;
+    text-align: left;
+    padding: 11px 12px;
+    margin-bottom: 3px;
+    cursor: pointer;
+    border-radius: 4px;
+}
+
+.nav:hover,
+.nav.active {
+    background: #171c25;
+    color: #f0f4f8;
+}
+
+.main {
+    flex: 1;
+    padding: 30px;
+    max-width: 1500px;
+}
+
+.page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+}
+
+.page-header h2 {
+    font-size: 18px;
+    letter-spacing: 2px;
+}
+
+.page-header p {
+    margin-top: 6px;
+    color: #687384;
+    font-size: 12px;
+}
+
+.version {
+    border: 1px solid #252d39;
+    padding: 8px 12px;
+    font-size: 10px;
+    color: #8f99a9;
+}
+
+.dashboard {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 18px;
+}
+
+.card {
+    border: 1px solid #202632;
+    background: #0c1017;
+    padding: 18px;
+}
+
+.card-label {
+    display: block;
+    font-size: 9px;
+    letter-spacing: 2px;
+    color: #697485;
+    margin-bottom: 10px;
+}
+
+.card strong {
+    font-size: 14px;
+    letter-spacing: 1px;
+}
+
+.console {
+    height: calc(100vh - 285px);
+    min-height: 420px;
+    border: 1px solid #202632;
+    background: #090c11;
+    display: flex;
+    flex-direction: column;
+}
+
+.console-header {
+    height: 44px;
+    border-bottom: 1px solid #202632;
+    padding: 0 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    color: #778293;
+}
+
+.messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+}
+
+.message {
+    margin-bottom: 20px;
+    max-width: 800px;
+    line-height: 1.6;
+    font-size: 13px;
+}
+
+.message-name {
+    font-size: 9px;
+    letter-spacing: 2px;
+    color: #758091;
+    margin-bottom: 5px;
+}
+
+.message.you {
+    margin-left: auto;
+    text-align: right;
+}
+
+.input-area {
+    border-top: 1px solid #202632;
+    padding: 12px;
+    display: flex;
+    gap: 10px;
+}
+
+.input-area input {
+    flex: 1;
+    background: #0e1219;
+    border: 1px solid #252d39;
+    color: white;
+    padding: 13px;
+    outline: none;
+}
+
+.input-area input:focus {
+    border-color: #596575;
+}
+
+.input-area button {
+    background: #e8edf5;
+    border: 0;
+    padding: 0 22px;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+footer {
+    height: 34px;
+    border-top: 1px solid #202632;
+    background: #0c0f15;
+    display: flex;
+    align-items: center;
+    gap: 25px;
+    padding: 0 20px;
+    font-size: 9px;
+    color: #667181;
+    letter-spacing: 1px;
+}
+
+@media (max-width: 900px) {
+    .sidebar {
+        width: 170px;
+    }
+
+    .dashboard {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 650px) {
+    .sidebar {
+        display: none;
+    }
+
+    .main {
+        padding: 15px;
+    }
+
+    .dashboard {
+        grid-template-columns: 1fr 1fr;
+    }
+}
