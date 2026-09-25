@@ -1,4 +1,9 @@
-from src.original_repo_mapper import build_repo_matrix, classify_repo, discover_original_repositories
+from src.original_repo_mapper import (
+    build_repo_matrix,
+    classify_repo,
+    discover_nested_repositories,
+    discover_original_repositories,
+)
 
 
 def test_original_repositories_are_discovered():
@@ -26,3 +31,11 @@ def test_repo_matrix_includes_adaptable_candidates():
     assert any(entry["repository"] == "memU" and entry["recommendation"] == "EXTRACT" for entry in matrix)
     assert any(entry["repository"] == "Open-Computer-Use" and entry["recommendation"] == "ADAPT" for entry in matrix)
     assert any(entry["repository"] == "Repos" and entry["recommendation"] == "KEEP" for entry in matrix)
+
+
+def test_nested_repository_discovery(tmp_path):
+    project = tmp_path / "nested-project"
+    project.mkdir()
+    (project / ".git").mkdir()
+
+    assert discover_nested_repositories(tmp_path) == ["nested-project"]

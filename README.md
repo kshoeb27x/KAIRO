@@ -84,3 +84,5 @@ and model integrations remain optional and are not copied into the core.
 See `00_FOUNDATION/Architecture/MASTER_ARCHITECTURE.md`,
 `10_DOCUMENTATION/Technical/REPOSITORY_MIGRATION.md`, and
 `10_DOCUMENTATION/Technical/REPOSITORY_DECISIONS.md`.
+The final archive capability closure is recorded in
+`10_DOCUMENTATION/Technical/SOURCE_CAPABILITY_CLOSURE.md`.

@@ -4,6 +4,11 @@
 **Scope:** the eight candidates in `00_FOUNDATION/Architecture/Old_Repositories`  
 **Evidence:** the existing read-only inventory, capability, and deep-audit reports.
 
+> **Closure note:** The implementation status and final project-level
+> classifications are superseded by
+> [SOURCE_CAPABILITY_CLOSURE.md](./SOURCE_CAPABILITY_CLOSURE.md). This document
+> preserves the original controlled migration decisions and guardrails.
+
 ## Guardrails
 
 - These are architecture decisions, not permission to copy, execute, or merge

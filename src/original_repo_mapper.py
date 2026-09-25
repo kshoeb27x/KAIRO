@@ -74,6 +74,25 @@ def discover_original_repositories(root: Path | str = ORIGINAL_REPOSITORIES_ROOT
     )
 
 
+def discover_nested_repositories(
+    root: Path | str = ORIGINAL_REPOSITORIES_ROOT / "Repos",
+) -> list[str]:
+    """Discover independent repositories below an archive collection."""
+
+    repo_root = Path(root)
+    if not repo_root.exists():
+        return []
+
+    discovered: list[str] = []
+    for git_path in repo_root.rglob(".git"):
+        project = git_path.parent
+        if project == repo_root:
+            continue
+        discovered.append(str(project.relative_to(repo_root)))
+
+    return sorted(discovered)
+
+
 def classify_repo(repo_name: str) -> dict[str, str]:
     """Map a repository name to the KAIRO domain that best fits it."""
 
