@@ -17,5 +17,6 @@ data/processed/
 dist/
 build/
 # KAIRO internal archives / rollback data
+00_FOUNDATION/Architecture/Old_Repositories/
 11_ARCHIVE/
 15_ROLLBACK_SNAPSHOTS/
