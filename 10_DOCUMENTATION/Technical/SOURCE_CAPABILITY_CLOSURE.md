@@ -94,6 +94,33 @@ The final disposition of every nested project is:
 Remaining sources are closed with no `UNKNOWN`, `UNREVIEWED`, `UNDECIDED`, or
 `PENDING` disposition.
 
+## Mapped component disposition
+
+The numbered KAIRO layers contain `COMPONENTS/MAP-*` directories from the
+earlier mapping process. A current structural and import review found that
+these are isolated one-file snapshots: 1,093 MAP directories across
+`01_CORE`, `02_AGENTS`, `03_DATA`, `04_TOOLS`, `05_UI`, `06_SECURITY`,
+`07_RUNTIME`, and `08_BUSINESS`. They include source excerpts, README files,
+plans, examples, and configuration fragments in several languages.
+
+No active Python, TypeScript, JavaScript, Rust, Go, Java, or C# source imports
+a MAP component or references a `COMPONENTS/MAP-*` path. The production
+implementations remain in the canonical layer directories and are the source
+of truth. Therefore the current disposition is:
+
+- **Active/integrated MAP components:** none evidenced.
+- **Adapted MAP components:** none identifiable from repository evidence;
+  similar names are not proof of adaptation.
+- **Reference-only:** all inspected MAP snapshots, retained because unused
+  source is not sufficient evidence that deletion is safe.
+- **Duplicate/obsolete:** none proven by import, identity, or ownership
+  evidence.
+- **Unclear:** no operationally distinct component; individual snapshots
+  remain untouched rather than being guessed at or removed.
+
+This keeps the mapping material isolated without introducing duplicate
+implementations into the canonical architecture.
+
 ## Final archive consolidation
 
 The complete `11_ARCHIVE/Original_Repositories` tree was removed from the
