@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..tool import ToolDefinition
+from .provider import BrowserRequest, BrowserProvider
 
 
 class BrowserTool:
@@ -14,6 +15,9 @@ class BrowserTool:
         category="Browser",
         permissions=['network.read'],
     )
+
+    def __init__(self, provider: BrowserProvider | None = None) -> None:
+        self.provider = provider
 
     def execute(
         self,
@@ -36,6 +40,13 @@ class BrowserTool:
                     self.definition.permissions
                 ),
             }
+
+        if action in {"navigate", "click", "type"}:
+            if self.provider is None:
+                raise RuntimeError(
+                    "No browser provider is configured for external browser automation."
+                )
+            return self.provider.execute(BrowserRequest(action, arguments))
 
         if action == "echo":
             return {

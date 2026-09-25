@@ -43,6 +43,8 @@ class MemoryStore:
         content: str,
         scope: str = "default",
         metadata: dict[str, Any] | None = None,
+        *,
+        deduplicate: bool = True,
     ) -> MemoryRecord:
         if not content.strip():
             raise ValueError("Memory content is required.")
@@ -50,6 +52,24 @@ class MemoryStore:
             raise ValueError("Memory scope is required.")
 
         import json
+
+        if deduplicate:
+            existing = self._connection.execute(
+                """
+                SELECT * FROM memories
+                WHERE scope = ? AND content = ?
+                ORDER BY memory_id DESC LIMIT 1
+                """,
+                (scope, content),
+            ).fetchone()
+            if existing is not None:
+                return MemoryRecord(
+                    memory_id=int(existing["memory_id"]),
+                    scope=existing["scope"],
+                    content=existing["content"],
+                    metadata=json.loads(existing["metadata"]),
+                    created_at=existing["created_at"],
+                )
 
         created_at = datetime.now().isoformat()
         cursor = self._connection.execute(

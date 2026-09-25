@@ -26,7 +26,7 @@ class SecurityManager:
         self.audit = AuditLogger()
 
         self.sandbox = SandboxPolicy()
-        self.sandbox_provider = SandboxProvider(self.sandbox)
+        self.sandbox_provider = SandboxProvider(self.sandbox, self.audit)
 
     def authorize(
         self,
