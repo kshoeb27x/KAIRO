@@ -11,10 +11,10 @@ WEB_ROOT = PROJECT_ROOT / "05_UI" / "Web"
 
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.core.kairo_core import KairoCore
+from src.kairo_system import KairoSystem
 
 
-kairo = KairoCore()
+kairo = KairoSystem()
 
 
 class KairoHandler(BaseHTTPRequestHandler):

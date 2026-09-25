@@ -41,13 +41,14 @@ class KairoOrchestrator:
 
         if intent == "status_request":
             status = self.runtime.status()
+            runtime_status = status.get("runtime", status)
             return (
                 "KAIRO V1 | "
-                f"Core: {status['core']} | "
-                f"Runtime: {status['runtime']} | "
-                f"Security: {status['security']} | "
-                f"Tasks: {status['tasks']} | "
-                f"Events: {status['events']}"
+                f"Core: {status.get('core', 'ONLINE')} | "
+                f"Runtime: {runtime_status.get('status', 'ONLINE')} | "
+                f"Security: {status.get('security', 'ONLINE')} | "
+                f"Tasks: {status.get('tasks', runtime_status.get('tasks', 0))} | "
+                f"Events: {status.get('events', runtime_status.get('events', 0))}"
             )
 
         if intent == "task_creation":

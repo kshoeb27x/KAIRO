@@ -12,12 +12,12 @@ class KairoCore:
 
     VERSION = "V2"
 
-    def __init__(self) -> None:
+    def __init__(self, runtime: Any | None = None) -> None:
         self.name = "KAIRO"
         self.version = self.VERSION
         self.started_at = datetime.now()
 
-        self.runtime = KairoRuntime()
+        self.runtime = runtime or KairoRuntime()
         self.orchestrator = KairoOrchestrator(self.runtime)
 
         self._agents: dict[str, Any] = {}

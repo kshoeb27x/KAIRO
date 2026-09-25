@@ -1,10 +1,18 @@
 from __future__ import annotations
 
 from datetime import datetime
+from importlib import import_module
 from typing import Any
 
 from src.core.kairo_core import KairoCore
 from src.integration import load_components
+
+
+APITool = import_module("04_TOOLS.API.tool").APITool
+AutomationTool = import_module("04_TOOLS.Automation.tool").AutomationTool
+BrowserTool = import_module("04_TOOLS.Browser.tool").BrowserTool
+ComputerUseTool = import_module("04_TOOLS.Computer_Use.tool").ComputerUseTool
+MCPTool = import_module("04_TOOLS.MCP.tool").MCPTool
 
 
 class KairoSystem:
@@ -19,9 +27,8 @@ class KairoSystem:
 
         components = load_components()
 
-        self.core = KairoCore()
-
         self.runtime = components["runtime"]()
+        self.core = KairoCore(runtime=self.runtime)
         self.agents = components["agents"]()
 
         self.database = components["database"]()
@@ -36,9 +43,16 @@ class KairoSystem:
 
         self.security = components["security"]()
 
-        # Tools remain outside this integration until their
-        # existing implementation is wired into the system.
-        self.tools = None
+        tools_module = __import__("04_TOOLS.manager", fromlist=["ToolManager"])
+        self.tools = tools_module.ToolManager()
+        for tool in (
+            BrowserTool(),
+            ComputerUseTool(),
+            APITool(),
+            MCPTool(),
+            AutomationTool(),
+        ):
+            self.tools.register(tool)
 
         self._status = "ONLINE"
 
@@ -54,7 +68,7 @@ class KairoSystem:
                 "agents": self.agents.health(),
                 "data": self.data.health(),
                 "tools": {
-                    "status": "NOT_INTEGRATED",
+                    **self.tools.health(),
                 },
                 "security": self.security.health(),
             },
@@ -62,6 +76,12 @@ class KairoSystem:
 
     def status(self) -> dict[str, Any]:
         return self.health()
+
+    def respond(self, message: str) -> str:
+        return self.core.respond(message)
+
+    def events(self, limit: int = 50) -> list[dict[str, Any]]:
+        return self.core.events(limit)
 
     def component(self, name: str) -> Any:
         return getattr(self, name, None)
@@ -75,3 +95,11 @@ class KairoSystem:
         task: str,
     ) -> Any:
         return self.agents.execute(name, task)
+
+    def execute_tool(
+        self,
+        tool: str,
+        action: str,
+        arguments: dict[str, Any] | None = None,
+    ) -> Any:
+        return self.tools.execute(tool, action, arguments)
