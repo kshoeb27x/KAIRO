@@ -6,12 +6,17 @@ from src.original_repo_mapper import (
 )
 
 
-def test_original_repositories_are_discovered():
-    repos = discover_original_repositories()
+def test_original_repository_discovery_handles_missing_archive(tmp_path):
+    assert discover_original_repositories(tmp_path) == []
 
-    assert "memU" in repos
-    assert "Open-Computer-Use" in repos
-    assert "Repos" in repos
+
+def test_original_repositories_are_discovered_from_an_archive(tmp_path):
+    for name in ("memU", "Open-Computer-Use", "Repos"):
+        (tmp_path / name).mkdir()
+
+    repos = discover_original_repositories(tmp_path)
+
+    assert repos == ["Open-Computer-Use", "Repos", "memU"]
 
 
 def test_repo_classification_maps_to_kairo_domains():
@@ -25,8 +30,11 @@ def test_repo_classification_maps_to_kairo_domains():
     assert volt["kairo_domain"] == "07_RUNTIME"
 
 
-def test_repo_matrix_includes_adaptable_candidates():
-    matrix = build_repo_matrix()
+def test_repo_matrix_includes_adaptable_candidates(tmp_path):
+    for name in ("memU", "Open-Computer-Use", "VoltAgent", "Repos"):
+        (tmp_path / name).mkdir()
+
+    matrix = build_repo_matrix(tmp_path)
 
     assert any(entry["repository"] == "memU" and entry["recommendation"] == "EXTRACT" for entry in matrix)
     assert any(entry["repository"] == "Open-Computer-Use" and entry["recommendation"] == "ADAPT" for entry in matrix)

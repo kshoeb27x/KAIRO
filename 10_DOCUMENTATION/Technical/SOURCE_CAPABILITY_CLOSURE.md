@@ -3,9 +3,9 @@
 **Scope:** `11_ARCHIVE/Original_Repositories`  
 **Closure date:** 2026-09-25
 
-This review is at project and capability level. Original repositories remain
-protected source material; no complete upstream repository is imported into
-active KAIRO.
+This review is at project and capability level. No complete upstream repository
+was imported into active KAIRO. The original source archive has now been moved
+to the final rollback snapshot recorded below.
 
 ## Integrated into KAIRO
 
@@ -92,8 +92,21 @@ The final disposition of every nested project is:
 | `Awesome-Personal-AI` | REFERENCE_ONLY | `10_DOCUMENTATION` | Catalog used for capability discovery only; no executable source. | Curated list without implementation or runtime contract. No integration required. |
 
 Remaining sources are closed with no `UNKNOWN`, `UNREVIEWED`, `UNDECIDED`, or
-`PENDING` disposition. Archive deletion is intentionally deferred pending
-explicit authorization.
+`PENDING` disposition.
+
+## Final archive consolidation
+
+The complete `11_ARCHIVE/Original_Repositories` tree was moved out of the
+active archive path after dependency checks passed:
+
+- **Archive path:** `11_ARCHIVE/Original_Repositories`
+- **Status:** removed from active KAIRO path
+- **Rollback snapshot:** `15_ROLLBACK_SNAPSHOTS/FINAL_SOURCE_ARCHIVE_20260925_075145/`
+- **Manifest:** `15_ROLLBACK_SNAPSHOTS/FINAL_SOURCE_ARCHIVE_20260925_075145/manifest.json`
+- **Preserved source size:** 99,564 files / 4,854,277,313 bytes
+
+The rollback snapshot preserves the complete original source tree without
+making it a runtime dependency or tracked active implementation.
 
 ## Closure result
 
