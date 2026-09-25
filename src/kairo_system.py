@@ -29,7 +29,7 @@ class KairoSystem:
 
         self.runtime = components["runtime"]()
         self.core = KairoCore(runtime=self.runtime)
-        self.agents = components["agents"]()
+        self.agents = self.core.orchestrator.agents
 
         self.database = components["database"]()
         self.knowledge = components["knowledge"]()

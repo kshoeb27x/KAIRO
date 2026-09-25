@@ -124,18 +124,21 @@ async function loadStatus() {
         const response = await fetch("/api/status");
 
         const status = await response.json();
+        const components = status.components || {};
+        const core = components.core || {};
+        const security = components.security || {};
 
         document.getElementById("core-status").textContent =
-            status.core || "UNKNOWN";
+            status.core || core.core || "UNKNOWN";
 
         document.getElementById("security-status").textContent =
-            status.security || "UNKNOWN";
+            status.security || security.status || "UNKNOWN";
 
         document.getElementById("mode-status").textContent =
-            status.mode || "UNKNOWN";
+            status.mode || core.mode || "UNKNOWN";
 
         document.getElementById("version-status").textContent =
-            status.version || "UNKNOWN";
+            status.version || core.version || "UNKNOWN";
 
         document.getElementById("connection").textContent =
             "CONNECTED";

@@ -31,3 +31,14 @@ def test_system_executes_tool() -> None:
 
     assert result.status == "COMPLETED"
     assert result.result == {"message": "hello"}
+
+
+def test_system_registers_and_executes_agents() -> None:
+    system = KairoSystem()
+
+    assert system.agents.list_agents() == ["coding", "data", "research"]
+
+    result = system.execute_agent("research", "find relevant facts")
+
+    assert result.status == "COMPLETED"
+    assert result.agent == "research"

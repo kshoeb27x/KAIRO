@@ -40,3 +40,11 @@ class AgentManager:
 
     def list_agents(self) -> list[str]:
         return sorted(self._agents)
+
+    def health(self) -> dict[str, Any]:
+        agents = self.list_agents()
+        return {
+            "status": "ONLINE",
+            "count": len(agents),
+            "agents": agents,
+        }

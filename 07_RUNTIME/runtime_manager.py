@@ -120,6 +120,9 @@ class RuntimeManager:
 
         return snapshot
 
+    def recent_events(self, limit: int = 50) -> list[dict]:
+        return self.events.recent(limit)
+
     def health(self) -> dict:
 
         return {
