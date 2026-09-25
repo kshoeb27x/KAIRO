@@ -1,1 +1,0 @@
-"""JARVIS backend application package."""

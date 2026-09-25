@@ -4,8 +4,8 @@
 **Closure date:** 2026-09-25
 
 This review is at project and capability level. No complete upstream repository
-was imported into active KAIRO. The original source archive has now been moved
-to the final rollback snapshot recorded below.
+was imported into active KAIRO. The original source archive was reviewed before being removed from the active
+project. No archived repository is a runtime dependency.
 
 ## Integrated into KAIRO
 
@@ -96,24 +96,20 @@ Remaining sources are closed with no `UNKNOWN`, `UNREVIEWED`, `UNDECIDED`, or
 
 ## Final archive consolidation
 
-The complete `11_ARCHIVE/Original_Repositories` tree was moved out of the
-active archive path after dependency checks passed:
+The complete `11_ARCHIVE/Original_Repositories` tree was removed from the
+active project after dependency checks passed:
 
 - **Archive path:** `11_ARCHIVE/Original_Repositories`
 - **Status:** removed from active KAIRO path
-- **Rollback snapshot:** `15_ROLLBACK_SNAPSHOTS/FINAL_SOURCE_ARCHIVE_20260925_075145/`
-- **Manifest:** `15_ROLLBACK_SNAPSHOTS/FINAL_SOURCE_ARCHIVE_20260925_075145/manifest.json`
-- **Preserved source size:** 99,564 files / 4,854,277,313 bytes
-
-The rollback snapshot preserves the complete original source tree without
-making it a runtime dependency or tracked active implementation.
+- **Rollback storage:** removed during final project cleanup
+- **Preserved source size before cleanup:** 99,564 files / 4,854,277,313 bytes
 
 ## Closure result
 
-Every major archive source is now classified as integrated, already
-represented, reference-only, externally dependent, unsuitable for direct
-integration, or duplicate/overlapping. No unnecessary archive code was copied
-into active KAIRO, and no protected source was deleted.
+Every major archive source was classified as integrated, already represented,
+reference-only, externally dependent, unsuitable for direct integration, or
+duplicate/overlapping. No unnecessary archive code was copied into active
+KAIRO.
 
 ## Repos adaptations and validation
 

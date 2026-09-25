@@ -1,8 +1,0 @@
-# Cerebral's runtime + dev dependencies are declared in the project-root
-# pyproject.toml (Issue #156). Install in editable mode from the project root:
-#
-#     pip install -e .          # runtime deps
-#     pip install -e .[dev]     # runtime + pytest / pytest-asyncio
-#
-# This file is kept as a pointer for anyone reaching for the old
-# `pip install -r cerebral/requirements.txt` incantation.

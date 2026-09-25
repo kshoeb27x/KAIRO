@@ -1,2 +1,0 @@
-# Web browser tool: YouTube video search (open_url is stdlib).
-yt-dlp>=2024.10.0

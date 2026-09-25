@@ -1,5 +1,0 @@
-# Foundation dependencies only. Add project-specific dependencies after repository audit.
-pydantic>=2
-python-dotenv>=1
-PyYAML>=6
-pytest>=8
