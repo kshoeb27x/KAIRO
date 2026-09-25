@@ -65,6 +65,11 @@ class ToolRegistry:
 
     def health(self) -> dict:
         definitions = self.definitions()
+        providers = {}
+        for name, tool in self._tools.items():
+            health = getattr(tool, "provider_health", None)
+            if callable(health):
+                providers[name] = health()
 
         return {
             "status": "ONLINE",
@@ -74,4 +79,5 @@ class ToolRegistry:
                 for definition in definitions
                 if definition.enabled
             ),
+            "providers": providers,
         }

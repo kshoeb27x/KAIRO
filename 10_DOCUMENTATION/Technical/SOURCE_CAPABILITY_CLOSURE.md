@@ -79,6 +79,22 @@ The final disposition of every nested project is:
 | `SpencerPros-jarvis` | OBSOLETE | Minimal prototype voice loop adds no unique capability to KAIRO. |
 | `theinizializer-Jarvis` | UNSUITABLE | SSH, Discord, speaker verification, and multi-provider access create an excessive external attack surface. |
 
+## Remaining source closure
+
+| Source | Disposition | KAIRO destination | Implementation status | Reason and validation |
+| --- | --- | --- | --- | --- |
+| `MIRA` | REFERENCE_ONLY | `01_CORE`, `04_TOOLS`, `06_SECURITY`, `07_RUNTIME` | Requirements already represented; no AGPL Rust code imported. | Rust multi-channel/voice/backup product with tightly coupled infrastructure. README and Cargo architecture reviewed; existing core/tool/security/runtime tests cover the bounded KAIRO equivalents. |
+| `OpenMind` | ADAPTED | `04_TOOLS`, `06_SECURITY` | Provider availability and fail-closed reporting now use KAIRO’s existing optional-provider contract. | Proprietary Electron/Python product; local model, voice, MCP, and permission concepts are external or already covered. Provider-health tests pass. |
+| `memU` | INTEGRATED | `03_DATA/Memory` | SQLite scoped memory, recall limits, and duplicate suppression are KAIRO-native. | Apache-2.0 memory service depends on host adapters/cloud embeddings; only bounded memory semantics were adopted. Memory integration tests pass. |
+| `OCT-Agent` | REFERENCE_ONLY | `02_AGENTS`, `03_DATA`, `07_RUNTIME` | Existing KAIRO agent/runtime/data contracts cover the useful boundaries. | Apache-2.0 but broad OpenClaw-compatible desktop/CLI platform with hybrid retrieval and parallel agents; no isolated improvement justified beyond current memory/runtime work. Existing agent/runtime tests pass. |
+| `Open-Computer-Use` | ADAPTED | `04_TOOLS`, `06_SECURITY` | Provider-neutral browser contract plus approval-controlled sandbox boundary; no Docker executor imported. | FSL-1.1 sandbox/MCP product requires Docker, browser, and external services. Provider refusal, approval, audit, and health tests pass. |
+| `VoltAgent` | ADAPTED | `07_RUNTIME`, `02_AGENTS` | Bounded retries, attempt accounting, and execution events are KAIRO-native. | MIT TypeScript framework is too broad to embed; retry/telemetry semantics fit existing runtime. Runtime tests pass. |
+| `Awesome-Personal-AI` | REFERENCE_ONLY | `10_DOCUMENTATION` | Catalog used for capability discovery only; no executable source. | Curated list without implementation or runtime contract. No integration required. |
+
+Remaining sources are closed with no `UNKNOWN`, `UNREVIEWED`, `UNDECIDED`, or
+`PENDING` disposition. Archive deletion is intentionally deferred pending
+explicit authorization.
+
 ## Closure result
 
 Every major archive source is now classified as integrated, already
