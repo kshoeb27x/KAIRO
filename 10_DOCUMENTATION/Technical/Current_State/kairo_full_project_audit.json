@@ -1,0 +1,169 @@
+{
+  "audit_timestamp": "2026-09-25",
+  "repository": "C:/Users/kshoe/Downloads/KAIRO_Foundation/KAIRO",
+  "branch": "master",
+  "scope": {
+    "active_excludes": [".git", ".venv", ".tools"],
+    "implementation_modified": false,
+    "commit_created": false
+  },
+  "filesystem": {
+    "active_files": 1114,
+    "active_directories": 522,
+    "active_bytes": 2312767030,
+    "size_distribution": {
+      "zero_bytes": 0,
+      "under_1kb": 527,
+      "under_1mb": 560,
+      "at_least_1mb": 27
+    },
+    "environment_files": {
+      ".tools": 2243,
+      ".venv": 1587,
+      ".git": 210
+    },
+    "empty_active_files": 0,
+    "empty_active_directories": 0,
+    "active_map_directories": 0,
+    "protected_foundation_map_directories": 2,
+    "active_cache_items_after_validation": 1843
+  },
+  "architecture": {
+    "00_FOUNDATION": "REFERENCE_ONLY_MIXED",
+    "01_CORE": "INTEGRATED",
+    "02_AGENTS": "INTEGRATED",
+    "03_DATA": "INTEGRATED",
+    "04_TOOLS": "INTEGRATED",
+    "05_UI": "INTEGRATED_PARTIAL",
+    "06_SECURITY": "INTEGRATED",
+    "07_RUNTIME": "INTEGRATED",
+    "08_BUSINESS": "MISSING",
+    "09_INTELLIGENCE": "MISSING",
+    "10_DOCUMENTATION": "REFERENCE_ONLY",
+    "10_INFRASTRUCTURE": "MISSING",
+    "11_ARCHIVE": "MISSING",
+    "19_ARCHITECTURE": "REFERENCE_ONLY",
+    "config": "INTEGRATED",
+    "scripts": "UTILITY",
+    "src": "ACTIVE_INTEGRATED",
+    "tests": "ACTIVE_VALIDATION"
+  },
+  "entry_points": [
+    "src/__main__.py",
+    "src/main.py",
+    "src/kairo.py",
+    "src/kairo_system.py",
+    "src/api/server.py"
+  ],
+  "integration_graph": [
+    {"caller": "src/api/server.py", "callee": "src.kairo_system.KairoSystem", "interface": "HTTP API/UI composition"},
+    {"caller": "src/kairo_system.py", "callee": "src.integration.load_components", "interface": "component loading"},
+    {"caller": "src/integration.py", "callee": "02_AGENTS, 03_DATA, 06_SECURITY, 07_RUNTIME", "interface": "dynamic package loading"},
+    {"caller": "src/core/kairo_core.py", "callee": "07_RUNTIME.RuntimeManager", "interface": "shared runtime"},
+    {"caller": "01_CORE/Orchestration/orchestrator.py", "callee": "01_CORE context/planning/reasoning and 02_AGENTS", "interface": "dispatch and agent execution"},
+    {"caller": "src/kairo_system.py", "callee": "04_TOOLS API/Automation/Browser/Computer_Use/MCP", "interface": "tool registration"}
+  ],
+  "validation": {
+    "pytest": {"status": "PASS", "passed": 76},
+    "python_compilation": "PASS",
+    "cli_status": "PASS",
+    "cli_validate": "PASS",
+    "system_boot": "PASS",
+    "core_runtime_shared_identity": "PASS",
+    "agent_execution": "PASS",
+    "task_lifecycle": "PASS",
+    "data_memory": "PASS",
+    "security_health": "PASS",
+    "api_ui": {
+      "GET /api/status": 200,
+      "GET /api/tasks": 200,
+      "GET /api/events": 200,
+      "POST /api/tasks": 201,
+      "GET /": 200,
+      "GET /style.css": 200,
+      "GET /app.js": 200
+    },
+    "git_diff_check": "PASS"
+  },
+  "capability_matrix": {
+    "AI_LLM": "PRESENT_ACTIVE_INTEGRATED_TESTED_DEVELOPMENT_PROVIDER",
+    "Agents": "PRESENT_ACTIVE_INTEGRATED_TESTED",
+    "Reasoning": "PRESENT_ACTIVE_INTEGRATED_TESTED",
+    "Planning": "PRESENT_ACTIVE_INTEGRATED_TESTED",
+    "Memory": "PRESENT_ACTIVE_INTEGRATED_TESTED",
+    "RAG": "PRESENT_PARTIAL_INTEGRATED_TESTED",
+    "Database": "PRESENT_ACTIVE_INTEGRATED_TESTED",
+    "Vector": "PRESENT_ACTIVE_INTEGRATED_TESTED",
+    "Knowledge": "PRESENT_ACTIVE_INTEGRATED_TESTED",
+    "Browser": "PRESENT_OPTIONAL_INTEGRATED_TESTED",
+    "Computer_Use": "PRESENT_OPTIONAL_POLICY_BOUND_TESTED",
+    "Voice": "MISSING",
+    "API": "PRESENT_ACTIVE_INTEGRATED_TESTED",
+    "MCP": "PRESENT_OPTIONAL_INTEGRATED_TESTED",
+    "Automation": "PRESENT_ACTIVE_INTEGRATED_TESTED",
+    "Runtime": "PRESENT_ACTIVE_INTEGRATED_TESTED",
+    "Workflow": "PRESENT_ACTIVE_INTEGRATED_TESTED",
+    "Scheduler": "PRESENT_ACTIVE_INTEGRATED_TESTED",
+    "Security": "PRESENT_ACTIVE_INTEGRATED_TESTED",
+    "Authority": "PRESENT_ACTIVE_INTEGRATED_TESTED",
+    "Permissions": "PRESENT_ACTIVE_INTEGRATED_TESTED",
+    "Sandbox": "PRESENT_ACTIVE_INTEGRATED_TESTED",
+    "UI": "PRESENT_ACTIVE_INTEGRATED_TESTED",
+    "Dashboard": "PARTIAL",
+    "Command_Center": "PRESENT_ACTIVE_INTEGRATED_TESTED",
+    "Analytics": "MISSING",
+    "Visual_Intelligence": "MISSING",
+    "Self_Improvement": "MISSING",
+    "Business": "MISSING",
+    "Trading": "MISSING",
+    "Finance": "MISSING",
+    "Infrastructure": "PARTIAL",
+    "Containers": "MISSING",
+    "Monitoring": "PARTIAL_ACTIVE_TESTED",
+    "Deployment": "MISSING"
+  },
+  "health": {
+    "operational": "PASS",
+    "architecture": "PARTIAL",
+    "integration": "PASS",
+    "tests": "PASS",
+    "security": "PASS",
+    "documentation": "PARTIAL",
+    "cleanliness": "PARTIAL"
+  },
+  "findings": {
+    "critical": [],
+    "high": [],
+    "medium": [],
+    "low": [
+      "Documentation and utility scripts reference deleted 11_ARCHIVE/Original_Repositories and 15_ROLLBACK_SNAPSHOTS paths.",
+      "Validation recreates Python cache artifacts."
+    ],
+    "info": [
+      "Protected 00_FOUNDATION contains historical source and two MAP snapshots.",
+      "Local API has no evidenced remote authentication layer and binds to 127.0.0.1."
+    ]
+  },
+  "git": {
+    "branch": "master",
+    "latest_commit": "e6c8d41d Remove obsolete mapped component snapshots",
+    "tracked_files": 153,
+    "gitlinks": 0,
+    "working_tree": ["D 03_DATA/RAG/__init__.py"],
+    "commit_created": false
+  },
+  "missing_or_optional": [
+    "Voice subsystem",
+    "Analytics and visual intelligence",
+    "Business, finance, trading",
+    "Deployment and container subsystem",
+    "External LLM, browser, MCP, voice, and embedding providers"
+  ],
+  "documentation_discrepancies": [
+    "README.md references removed 11_ARCHIVE/Original_Repositories.",
+    "START_HERE.md references an archive path that is absent.",
+    "KAIRO_MASTER_CHANGE_PLAN.md describes the removed archive as frozen.",
+    "CURRENT_STATE.md reports deleted archive and rollback paths as present.",
+    "Engineering runner utilities retain archive and rollback path constants."
+  ]
+}
