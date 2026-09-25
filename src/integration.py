@@ -79,6 +79,7 @@ def load_components() -> dict[str, object]:
         "database": data.Database,
         "knowledge": data.KnowledgeStore,
         "vector": data.VectorStore,
+        "memory": data.MemoryStore,
         "data_manager": data.DataManager,
         "security": security.SecurityManager,
     }

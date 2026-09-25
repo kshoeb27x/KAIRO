@@ -10,6 +10,7 @@ from .Authority.authority import (
 from .Identity.identity import IdentityManager
 from .Permissions.permissions import PermissionManager
 from .Sandbox.sandbox import SandboxPolicy
+from .Sandbox.provider import SandboxProvider
 from .Secrets.secrets import SecretStore
 
 
@@ -25,6 +26,7 @@ class SecurityManager:
         self.audit = AuditLogger()
 
         self.sandbox = SandboxPolicy()
+        self.sandbox_provider = SandboxProvider(self.sandbox)
 
     def authorize(
         self,
@@ -114,4 +116,5 @@ class SecurityManager:
             "secrets": self.secrets.health(),
             "audit": self.audit.health(),
             "sandbox": self.sandbox.summary(),
+            "sandbox_provider": self.sandbox_provider.health(),
         }

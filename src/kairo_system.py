@@ -34,11 +34,13 @@ class KairoSystem:
         self.database = components["database"]()
         self.knowledge = components["knowledge"]()
         self.vector = components["vector"]()
+        self.memory = components["memory"]()
 
         self.data = components["data_manager"](
             database=self.database,
             knowledge=self.knowledge,
             vector=self.vector,
+            memory=self.memory,
         )
 
         self.security = components["security"]()

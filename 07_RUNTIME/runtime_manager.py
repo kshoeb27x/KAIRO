@@ -68,6 +68,7 @@ class RuntimeManager:
         name: str,
         function: Callable[..., Any],
         *args: Any,
+        max_attempts: int = 1,
         **kwargs: Any,
     ):
 
@@ -75,6 +76,7 @@ class RuntimeManager:
             name,
             function,
             *args,
+            max_attempts=max_attempts,
             **kwargs,
         )
 

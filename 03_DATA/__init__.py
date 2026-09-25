@@ -15,6 +15,7 @@ from .Pipelines.pipeline import (
 from .Data_Management.data_manager import (
     DataManager,
 )
+from .Memory.memory_store import MemoryRecord, MemoryStore
 
 
 __all__ = [
@@ -27,4 +28,6 @@ __all__ = [
     "DataPipeline",
     "PipelineResult",
     "DataManager",
+    "MemoryRecord",
+    "MemoryStore",
 ]

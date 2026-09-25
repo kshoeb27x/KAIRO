@@ -130,6 +130,28 @@ def test_execution_failure():
     )
 
 
+def test_execution_retries_and_reports_attempts():
+    runtime = RuntimeManager()
+    attempts = {"count": 0}
+
+    def eventually_succeeds():
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise RuntimeError("retry")
+        return "ok"
+
+    result = runtime.execute(
+        "retry",
+        eventually_succeeds,
+        max_attempts=3,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.result == "ok"
+    assert result.attempts == 3
+    assert attempts["count"] == 3
+
+
 def test_workflow():
 
     runtime = RuntimeManager()

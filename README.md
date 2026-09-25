@@ -54,6 +54,27 @@ The `11_ARCHIVE/Original_Repositories` tree is a source archive, not a direct im
 
 This preserves the original projects while allowing KAIRO to adopt only the components that fit the controlled architecture instead of copying entire repositories into the active codebase.
 
+## Extracted capability adaptations
+
+The active KAIRO implementation contains small, KAIRO-owned adaptations informed
+by protected archive source. No upstream repository is imported as an active
+package:
+
+- `03_DATA/Memory` provides scoped SQLite-backed memory and text recall,
+  informed by the memory, database, and retrieval boundaries reviewed in
+  `11_ARCHIVE/Original_Repositories/memU`.
+- `06_SECURITY/Sandbox/provider.py` provides an approval- and policy-controlled
+  provider contract, informed by the isolation boundaries reviewed in
+  `11_ARCHIVE/Original_Repositories/Open-Computer-Use`.
+- `07_RUNTIME/Execution/executor.py` provides bounded retries and attempt
+  telemetry through KAIRO events, informed by the execution persistence and
+  observability patterns reviewed in
+  `11_ARCHIVE/Original_Repositories/VoltAgent`.
+
+These adaptations preserve KAIRO's existing component contracts and are tested
+through the active KAIRO test suite. Provider-specific Docker, browser, cloud,
+and model integrations remain optional and are not copied into the core.
+
 ## Verification
 
 ```powershell
