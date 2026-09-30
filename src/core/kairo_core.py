@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
@@ -18,42 +18,82 @@ class KairoCore:
         self.started_at = datetime.now()
 
         self.runtime = runtime or KairoRuntime()
-        self.orchestrator = KairoOrchestrator(self.runtime)
 
-        self._agents: dict[str, Any] = {}
+        self.orchestrator = KairoOrchestrator(
+            runtime=self.runtime
+        )
 
-    def register_agent(self, agent: Any) -> None:
-        name = getattr(agent, "name", None)
+        self.agent_manager = self.orchestrator.agents
 
-        if not name:
-            raise ValueError("Agent must expose a name")
+    def register_agent(
+        self,
+        agent: Any,
+        authority: Any | None = None,
+    ) -> None:
+        self.agent_manager.register(
+            agent,
+            authority,
+        )
 
-        self._agents[name] = agent
+    def unregister_agent(
+        self,
+        name: str,
+    ) -> bool:
+        if self.agent_manager.get(name) is None:
+            return False
 
-    def unregister_agent(self, name: str) -> bool:
-        return self._agents.pop(name, None) is not None
+        control = self.agent_manager.control(name)
+
+        if control.state.value != "STOPPED":
+            self.agent_manager.stop(name)
+
+        del self.agent_manager._agents[name]
+        del self.agent_manager._controls[name]
+
+        return True
 
     def list_agents(self) -> list[str]:
-        return sorted(self._agents)
+        return self.agent_manager.list_agents()
 
-    def execute_agent(self, name: str, task: str) -> Any:
-        agent = self._agents.get(name)
+    def execute_agent(
+        self,
+        name: str,
+        task: str,
+    ) -> dict[str, Any]:
+        execution = self.agent_manager.execute(
+            name,
+            task,
+        )
 
-        if agent is None:
-            raise KeyError(f"Agent not registered: {name}")
+        return {
+            "agent": execution.agent,
+            "task": execution.task,
+            "status": execution.status,
+            "result": execution.result,
+            "request_id": execution.request_id,
+            "started_at": execution.started_at,
+            "completed_at": execution.completed_at,
+        }
 
-        return agent.execute(task)
-
-    def create_task(self, name: str) -> dict:
+    def create_task(
+        self,
+        name: str,
+    ) -> dict[str, Any]:
         return self.runtime.create_task(name)
 
-    def respond(self, message: str) -> str:
+    def respond(
+        self,
+        message: str,
+    ) -> str:
         return self.orchestrator.dispatch(message)
 
-    def events(self, limit: int = 50) -> list[dict]:
+    def events(
+        self,
+        limit: int = 50,
+    ) -> list[dict]:
         return self.runtime.recent_events(limit)
 
-    def health(self) -> dict:
+    def health(self) -> dict[str, Any]:
         return {
             "system": self.name,
             "version": self.version,
@@ -61,26 +101,23 @@ class KairoCore:
             "mode": "DEVELOPMENT",
             "runtime": self.runtime.status(),
             "agents": self.list_agents(),
+            "agent_health": self.agent_manager.health(),
             "started_at": self.started_at.isoformat(),
         }
 
-    def status(self) -> dict:
-        runtime = self.runtime.status()
+    def status(self) -> dict[str, Any]:
+        runtime_status = self.runtime.status()
 
         return {
             "system": self.name,
             "version": self.version,
             "core": "ONLINE",
             "mode": "DEVELOPMENT",
-            "security": runtime.get("security"),
-            "runtime": runtime.get("runtime"),
-            "data": runtime.get("data"),
-            "network": runtime.get("network"),
-            "active_tasks": runtime.get("active_tasks"),
-            "completed_tasks": runtime.get("completed_tasks"),
-            "failed_tasks": runtime.get("failed_tasks"),
-            "active_agents": runtime.get("active_agents"),
-            "events": runtime.get("events", 0),
-            "tasks": runtime.get("tasks", 0),
-            "registered_agents": len(self._agents),
+            "runtime": runtime_status,
+            "registered_agents": len(
+                self.agent_manager.list_agents()
+            ),
+            "agent_health": self.agent_manager.health(),
+            "events": runtime_status.get("events", 0),
+            "tasks": runtime_status.get("tasks", 0),
         }

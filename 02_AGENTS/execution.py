@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+from uuid import uuid4
 
 
 @dataclass
@@ -10,6 +11,10 @@ class AgentRequest:
     agent: str
     task: str
     request_id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.request_id:
+            self.request_id = uuid4().hex
 
 
 @dataclass
@@ -20,10 +25,11 @@ class AgentExecutionResult:
     result: Any
     started_at: str
     completed_at: str
+    request_id: str = ""
 
 
 class AgentExecutor:
-    """Executes registered agents through one execution boundary."""
+    """Single execution boundary for KAIRO agents."""
 
     def execute(
         self,
@@ -34,9 +40,7 @@ class AgentExecutor:
         started = datetime.now().isoformat()
 
         try:
-            result = agent.execute(
-                request.task
-            )
+            result = agent.execute(request.task)
 
             if hasattr(result, "status"):
                 status = result.status
@@ -57,6 +61,7 @@ class AgentExecutor:
                 result=result,
                 started_at=started,
                 completed_at=datetime.now().isoformat(),
+                request_id=request.request_id,
             )
 
         except Exception as exc:
@@ -67,4 +72,5 @@ class AgentExecutor:
                 result=str(exc),
                 started_at=started,
                 completed_at=datetime.now().isoformat(),
+                request_id=request.request_id,
             )

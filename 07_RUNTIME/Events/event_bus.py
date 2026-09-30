@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -36,12 +36,41 @@ class EventBus:
     def emit(
         self,
         name: str,
+        source_or_payload: str | dict[str, Any] | None = None,
         payload: dict[str, Any] | None = None,
     ) -> Event:
+        """
+        Emit a runtime event.
+
+        Supported forms:
+
+            emit("EVENT", {"key": "value"})
+
+        and:
+
+            emit("EVENT", "source", {"key": "value"})
+
+        The second form is supported for AgentManager compatibility.
+        """
+
+        if isinstance(source_or_payload, str):
+            event_payload: dict[str, Any] = {
+                "source": source_or_payload,
+                **(payload or {}),
+            }
+
+        elif isinstance(source_or_payload, dict):
+            event_payload = dict(source_or_payload)
+
+            if payload:
+                event_payload.update(payload)
+
+        else:
+            event_payload = dict(payload or {})
 
         event = Event(
             name=name,
-            payload=payload or {},
+            payload=event_payload,
             created_at=datetime.now().isoformat(),
         )
 
@@ -59,6 +88,9 @@ class EventBus:
         self,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
+
+        if limit <= 0:
+            return []
 
         events = self._events[-limit:]
 
