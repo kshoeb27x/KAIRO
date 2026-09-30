@@ -1,10 +1,14 @@
+
 """KAIRO V1 agent manager."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from execution import AgentExecutor, AgentRequest
+try:
+    from ..execution import AgentExecutor, AgentRequest
+except ImportError:
+    from execution import AgentExecutor, AgentRequest
 
 
 class AgentManager:

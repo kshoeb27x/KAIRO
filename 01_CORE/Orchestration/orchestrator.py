@@ -1,4 +1,4 @@
-﻿"""KAIRO V1 orchestration layer."""
+"""KAIRO V1 orchestration layer."""
 
 from __future__ import annotations
 
