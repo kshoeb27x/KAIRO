@@ -4,6 +4,8 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
+from ..Database.database import Database
+
 
 @dataclass
 class VectorRecord:
@@ -13,13 +15,12 @@ class VectorRecord:
 
 
 class VectorStore:
-    """Minimal vector storage and cosine similarity search."""
+    """SQLite-backed vector records with cosine similarity search."""
 
-    def __init__(self) -> None:
-        self._records: dict[
-            str,
-            VectorRecord,
-        ] = {}
+    COLLECTION = "vectors"
+
+    def __init__(self, database: Database | None = None) -> None:
+        self.database = database or Database()
 
     def add(
         self,
@@ -27,25 +28,25 @@ class VectorStore:
         vector: list[float],
         metadata: dict[str, Any] | None = None,
     ) -> VectorRecord:
-
         if not vector_id:
-            raise ValueError(
-                "vector_id is required"
-            )
-
+            raise ValueError("vector_id is required")
         if not vector:
-            raise ValueError(
-                "vector cannot be empty"
-            )
+            raise ValueError("vector cannot be empty")
 
         record = VectorRecord(
             vector_id=vector_id,
-            vector=[float(x) for x in vector],
+            vector=[float(value) for value in vector],
             metadata=metadata or {},
         )
-
-        self._records[vector_id] = record
-
+        self.database.insert(
+            self.COLLECTION,
+            vector_id,
+            {
+                "vector_id": record.vector_id,
+                "vector": record.vector,
+                "metadata": record.metadata,
+            },
+        )
         return record
 
     @staticmethod
@@ -53,71 +54,51 @@ class VectorStore:
         left: list[float],
         right: list[float],
     ) -> float:
-
         if len(left) != len(right):
-            raise ValueError(
-                "Vectors must have equal dimensions"
-            )
+            raise ValueError("Vectors must have equal dimensions")
 
-        left_norm = math.sqrt(
-            sum(x * x for x in left)
-        )
-
-        right_norm = math.sqrt(
-            sum(x * x for x in right)
-        )
-
+        left_norm = math.sqrt(sum(value * value for value in left))
+        right_norm = math.sqrt(sum(value * value for value in right))
         if left_norm == 0 or right_norm == 0:
             return 0.0
 
-        dot = sum(
-            a * b
-            for a, b in zip(left, right)
-        )
-
-        return dot / (
-            left_norm * right_norm
-        )
+        dot = sum(a * b for a, b in zip(left, right))
+        return dot / (left_norm * right_norm)
 
     def search(
         self,
         query: list[float],
         limit: int = 5,
     ) -> list[dict[str, Any]]:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        if not query:
+            raise ValueError("query vector cannot be empty")
 
         scored = []
-
-        for record in self._records.values():
-
+        for item in self.database.list_collection(self.COLLECTION):
             score = self.cosine_similarity(
-                query,
-                record.vector,
+                [float(value) for value in query],
+                item["vector"],
             )
-
-            scored.append(
-                {
-                    "vector_id": record.vector_id,
-                    "score": score,
-                    "metadata": record.metadata,
-                }
-            )
+            scored.append({
+                "vector_id": item["vector_id"],
+                "score": score,
+                "metadata": item["metadata"],
+            })
 
         scored.sort(
             key=lambda item: item["score"],
             reverse=True,
         )
-
         return scored[:limit]
 
     def count(self) -> int:
-        return len(
-            self._records
-        )
+        return len(self.database.list_collection(self.COLLECTION))
 
-    def health(self) -> dict:
+    def health(self) -> dict[str, Any]:
         return {
             "status": "ONLINE",
-            "vectors": len(
-                self._records
-            ),
+            "vectors": self.count(),
+            "durable": self.database.health()["durable"],
         }

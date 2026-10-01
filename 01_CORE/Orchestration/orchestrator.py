@@ -8,22 +8,26 @@ from Context.context import KairoContext
 from Planning.planner import KairoPlanner
 from Reasoning.reasoner import KairoReasoner
 from Manager.agent_manager import AgentManager
+from AI.ai import KairoAI
 
 
 class KairoOrchestrator:
     """Central dispatcher using context, reasoning, planning and runtime."""
 
-    def __init__(self, runtime: Any) -> None:
+    def __init__(self, runtime: Any, security: Any | None = None) -> None:
         self.runtime = runtime
         self.context = KairoContext()
         self.planner = KairoPlanner()
-        self.reasoner = KairoReasoner()
-
-        self.agents = AgentManager(
-            runtime=runtime
+        self.reasoner = KairoReasoner(
+            ai=KairoAI(security=security),
         )
 
-    def dispatch(self, message: str) -> str:
+        self.agents = AgentManager(
+            runtime=runtime,
+            security=security,
+        )
+
+    def dispatch(self, message: str, context: Any | None = None) -> str:
         message = message.strip()
 
         if not message:
@@ -32,11 +36,12 @@ class KairoOrchestrator:
         if message.lower() in {"exit", "quit"}:
             return "__EXIT__"
 
-        context = self.context.build(message)
+        conversation_context = self.context.build(message)
 
         result = self.reasoner.analyze(
-            context.current_input,
-            context.history,
+            conversation_context.current_input,
+            conversation_context.history,
+            context,
         )
 
         intent = result.intent
@@ -71,7 +76,7 @@ class KairoOrchestrator:
             if not name:
                 return "Task name is required."
 
-            task = self.runtime.create_task(name)
+            task = self.runtime.create_task(name, context)
 
             return (
                 f"Task created: "
@@ -114,9 +119,10 @@ class KairoOrchestrator:
             agent_result = self.agents.execute(
                 "research",
                 task,
+                context=context,
             )
 
-            return str(agent_result.result)
+            return self._agent_response(agent_result)
 
         if intent == "coding_request":
             prefix = "code "
@@ -135,9 +141,10 @@ class KairoOrchestrator:
             agent_result = self.agents.execute(
                 "coding",
                 task,
+                context=context,
             )
 
-            return str(agent_result.result)
+            return self._agent_response(agent_result)
 
         if intent == "data_request":
             prefix = "data "
@@ -156,11 +163,34 @@ class KairoOrchestrator:
             agent_result = self.agents.execute(
                 "data",
                 task,
+                context=context,
             )
 
-            return str(agent_result.result)
+            return self._agent_response(agent_result)
+
+        if intent == "engineering_request":
+            if self.agents.get("engineering") is None:
+                return "Engineering agent is not registered."
+            agent_result = self.agents.execute(
+                "engineering",
+                message,
+                context=context,
+            )
+            return self._agent_response(agent_result)
 
         if intent == "general_request":
             return result.reasoning
 
         return f"I received: {message}"
+
+    @staticmethod
+    def _agent_response(agent_result: Any) -> str:
+        if agent_result.status == "COMPLETED":
+            value = agent_result.result
+            if hasattr(value, "result"):
+                value = value.result
+            return str(value)
+        value = agent_result.result
+        if hasattr(value, "result"):
+            value = value.result
+        return f"{agent_result.agent} agent {agent_result.status}: {value}"

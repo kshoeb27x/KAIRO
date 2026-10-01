@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 try:
@@ -35,7 +36,11 @@ except ImportError:
 class AgentManager:
     """Central control plane for KAIRO agents."""
 
-    def __init__(self, runtime: Any | None = None) -> None:
+    def __init__(
+        self,
+        runtime: Any | None = None,
+        security: Any | None = None,
+    ) -> None:
         self._agents: dict[str, Any] = {}
         self._controls: dict[str, AgentControl] = {}
         self._history: list[AgentExecutionResult] = []
@@ -44,6 +49,7 @@ class AgentManager:
         self.executor = AgentExecutor()
         self.authority_controller = AgentAuthorityController()
         self.runtime = runtime
+        self.security = security
 
     def register(
         self,
@@ -82,6 +88,37 @@ class AgentManager:
         )
 
         self._controls[name] = control
+        if self.security is not None:
+            security_permissions = ["agent.execute", "runtime.execute"]
+            permission_mapping = {
+                Permission.DELEGATE: "agent.delegate",
+                Permission.READ_DATA: "data.read",
+                Permission.WRITE_DATA: "data.write",
+                Permission.USE_TOOLS: "tool.invoke",
+                Permission.BROWSER: "network.read",
+                Permission.COMPUTER_USE: "computer.interact",
+                Permission.NETWORK: "network.read",
+                Permission.ENGINEERING_INSPECT: "engineering.inspect",
+                Permission.ENGINEERING_PLAN: "engineering.plan",
+                Permission.ENGINEERING_MODIFY: "engineering.modify",
+                Permission.ENGINEERING_MODIFY_TESTS: "engineering.modify_tests",
+                Permission.ENGINEERING_TEST: "engineering.test",
+                Permission.ENGINEERING_CHECKPOINT: "engineering.checkpoint",
+                Permission.ENGINEERING_ROLLBACK: "engineering.rollback",
+                Permission.FILESYSTEM_WRITE: "filesystem.write",
+                Permission.PROCESS_EXECUTE: "process.execute",
+                Permission.MODEL_EXTERNAL: "model.external",
+                Permission.CREATE_TASK: "runtime.task.create",
+            }
+            security_permissions.extend(
+                permission_mapping[permission]
+                for permission in authority.permissions
+                if permission in permission_mapping
+            )
+            self.security.register_agent(
+                name,
+                tuple(security_permissions),
+            )
 
         self.authority_controller.transition(
             control,
@@ -260,11 +297,6 @@ class AgentManager:
             }:
                 self.stop(name)
 
-            if control.state == AgentState.STOPPED:
-                self.authority_controller.revoke_execute(
-                    control
-                )
-
             results[name] = control.state.value
 
         self._emit(
@@ -291,9 +323,28 @@ class AgentManager:
         name: str,
         task: str,
         max_attempts: int = 1,
+        context: Any | None = None,
     ) -> AgentExecutionResult:
 
         if self._system_killed:
+            if self.security is not None:
+                if context is None:
+                    self.security.audit.record(
+                        "AUTHORIZATION",
+                        None,
+                        "agent.execute",
+                        "DENY",
+                        {"agent": name, "reason": "EMERGENCY_STOP"},
+                    )
+                else:
+                    self.security.audit_execution(
+                        context.derive(
+                            operation="agent.execute",
+                            resource=name,
+                        ),
+                        "DENY",
+                        "EMERGENCY_STOP",
+                    )
             raise RuntimeError(
                 "KAIRO agent system is in EMERGENCY STOP."
             )
@@ -308,14 +359,65 @@ class AgentManager:
 
         control = self.control(agent_name)
 
-        self.authority_controller.require(
-            control,
-            Permission.EXECUTE,
+        if context is None or self.security is None:
+            if self.security is not None:
+                self.security.audit.record(
+                    "AUTHORIZATION",
+                    None,
+                    "agent.execute",
+                    "DENY",
+                    {
+                        "agent_identity": f"agent:{agent_name}",
+                        "permission": "agent.execute",
+                        "resource": agent_name,
+                        "reason": "MISSING_CONTEXT_OR_SECURITY",
+                    },
+                )
+            self._emit(
+                "AGENT_EXECUTION_DENIED",
+                agent_name,
+                {"reason": "MISSING_CONTEXT_OR_SECURITY"},
+            )
+            raise PermissionError(
+                "Agent execution requires an authorization context."
+            )
+
+        agent_context = context.derive(
+            permission="agent.execute",
+            operation="agent.execute",
+            resource=agent_name,
+            agent_identity=f"agent:{agent_name}",
         )
+        decision = self.security.authorize_context(
+            agent_context,
+            "agent.execute",
+        )
+        if not decision.allowed:
+            self.security.audit_execution(
+                agent_context,
+                decision.decision,
+                decision.reason,
+            )
+            raise PermissionError(
+                f"Agent execution denied: {decision.reason}"
+            )
+        try:
+            self.authority_controller.require(
+                control,
+                Permission.EXECUTE,
+            )
+        except PermissionError as error:
+            self.security.audit_execution(
+                agent_context,
+                "DENY",
+                str(error),
+            )
+            raise
 
         request = AgentRequest(
             agent=agent_name,
             task=task,
+            context=agent_context,
         )
 
         self._emit(
@@ -330,15 +432,31 @@ class AgentManager:
         if self.runtime is not None:
             runtime_result = self.runtime.execute(
                 f"agent:{agent_name}",
-                agent.execute,
+                self._invoke_agent,
+                agent,
                 task,
+                agent_context,
                 max_attempts=max_attempts,
+                context=agent_context.derive(
+                    permission="runtime.execute",
+                    operation="agent.runtime.execute",
+                    resource=agent_name,
+                ),
             )
 
             result = AgentExecutionResult(
                 agent=agent_name,
                 task=task,
-                status=runtime_result.status,
+                status=(
+                    getattr(runtime_result.result, "status")
+                    if runtime_result.status == "COMPLETED"
+                    and hasattr(runtime_result.result, "status")
+                    else runtime_result.result.get("status")
+                    if runtime_result.status == "COMPLETED"
+                    and isinstance(runtime_result.result, dict)
+                    and isinstance(runtime_result.result.get("status"), str)
+                    else runtime_result.status
+                ),
                 result=(
                     runtime_result.result
                     if runtime_result.status == "COMPLETED"
@@ -362,6 +480,15 @@ class AgentManager:
             control.failure_count += 1
 
         self._history.append(result)
+        self.security.audit_execution(
+            agent_context,
+            result.status,
+            (
+                result.result
+                if result.status != "COMPLETED"
+                else None
+            ),
+        )
 
         self._emit(
             "AGENT_EXECUTION_COMPLETED",
@@ -374,6 +501,73 @@ class AgentManager:
         )
 
         return result
+
+    @staticmethod
+    def _invoke_agent(
+        agent: Any,
+        task: str,
+        context: Any,
+    ) -> Any:
+        parameters = inspect.signature(agent.execute).parameters
+        accepts_context = (
+            "context" in parameters
+            or any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters.values()
+            )
+        )
+        return (
+            agent.execute(task, context=context)
+            if accepts_context
+            else agent.execute(task)
+        )
+
+    def delegate(
+        self,
+        source_agent: str,
+        target_agent: str,
+        task: str,
+        context: Any | None = None,
+    ) -> AgentExecutionResult:
+        if context is None or self.security is None:
+            raise PermissionError("Delegation requires an authorization context.")
+        source_name = source_agent.strip()
+        target_name = target_agent.strip()
+        source_control = self.control(source_name)
+        self.authority_controller.require(
+            source_control,
+            Permission.DELEGATE,
+        )
+        if context.agent_identity != f"agent:{source_name}":
+            raise PermissionError("Delegator identity does not match the source agent.")
+        delegation_context = context.derive(
+            permission="agent.delegate",
+            operation="agent.delegate",
+            resource=target_name,
+        )
+        decision = self.security.authorize_context(
+            delegation_context,
+            "agent.delegate",
+        )
+        if not decision.allowed:
+            self.security.audit_execution(
+                delegation_context,
+                decision.decision,
+                decision.reason,
+            )
+            raise PermissionError(f"Agent delegation denied: {decision.reason}")
+        delegated_context = context.derive(
+            permission="agent.execute",
+            operation="agent.delegated_execute",
+            resource=target_name,
+            agent_identity=f"agent:{target_name}",
+            delegated_by=source_name,
+        )
+        return self.execute(
+            target_name,
+            task,
+            context=delegated_context,
+        )
 
     def revoke_execute(self, name: str) -> None:
         control = self.control(name)
@@ -398,13 +592,20 @@ class AgentManager:
             self._controls[name].failure_count
             for name in agents
         )
+        unavailable = any(
+            self._controls[name].last_status == "UNAVAILABLE"
+            for name in agents
+        )
+        status = (
+            "EMERGENCY_STOP"
+            if self._system_killed
+            else "DEGRADED"
+            if failures or unavailable
+            else "ONLINE"
+        )
 
         return {
-            "status": (
-                "EMERGENCY_STOP"
-                if self._system_killed
-                else "ONLINE"
-            ),
+            "status": status,
             "count": len(agents),
             "failures": failures,
             "agents": agents,

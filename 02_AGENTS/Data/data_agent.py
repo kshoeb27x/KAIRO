@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from agent import AgentResult
 
 
 class DataAgent:
     name = "data"
 
-    def execute(self, task: str) -> AgentResult:
+    def execute(
+        self,
+        task: str,
+        context: Any | None = None,
+    ) -> AgentResult:
         task = task.strip()
 
         if not task:
@@ -17,9 +23,9 @@ class DataAgent:
         return AgentResult(
             agent=self.name,
             task=task,
-            status="COMPLETED",
-            result={
-                "message": f"Data task received: {task}",
-                "type": "structured",
-            },
+            status="UNAVAILABLE",
+            result=(
+                "Data analysis is unavailable: no authorized "
+                "data-analysis backend is configured."
+            ),
         )

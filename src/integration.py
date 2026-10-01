@@ -4,6 +4,7 @@ import importlib.util
 import sys
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -52,7 +53,7 @@ def load_package(
     return module
 
 
-def load_components() -> dict[str, object]:
+def load_components() -> dict[str, type[Any]]:
     agents = load_package(
         "kairo_agents",
         "02_AGENTS",

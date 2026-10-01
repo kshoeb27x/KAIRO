@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from importlib import import_module
 from typing import Any, Protocol
+
+ExecutionContext = import_module(
+    "06_SECURITY.execution_context"
+).ExecutionContext
 
 
 @dataclass
@@ -23,6 +28,7 @@ class ToolRequest:
     arguments: dict[str, Any] = field(
         default_factory=dict
     )
+    context: Any | None = None
 
 
 @dataclass

@@ -15,5 +15,9 @@ class AgentResult:
 class Agent(Protocol):
     name: str
 
-    def execute(self, task: str) -> AgentResult:
+    def execute(
+        self,
+        task: str,
+        context: Any | None = None,
+    ) -> AgentResult:
         ...

@@ -305,4 +305,4 @@ def test_authorization_audit():
     entries = security.audit.recent()
 
     assert len(entries) == 1
-    assert entries[0]["status"] == "ALLOWED"
+    assert entries[0]["status"] == "ALLOW"

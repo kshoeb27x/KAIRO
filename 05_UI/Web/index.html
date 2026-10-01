@@ -24,8 +24,8 @@
         </div>
 
         <div class="system-state">
-            <span class="dot"></span>
-            SYSTEM ONLINE
+            <span class="dot" id="system-dot" data-status="UNKNOWN"></span>
+            SYSTEM <strong id="system-status">UNKNOWN</strong>
         </div>
     </header>
 
@@ -69,23 +69,33 @@
             <div class="dashboard">
 
                 <div class="card">
+                    <span class="card-label">SYSTEM</span>
+                    <strong id="system-card-status">UNKNOWN</strong>
+                </div>
+
+                <div class="card">
                     <span class="card-label">CORE</span>
-                    <strong id="core-status">ONLINE</strong>
+                    <strong id="core-status">UNKNOWN</strong>
                 </div>
 
                 <div class="card">
                     <span class="card-label">SECURITY</span>
-                    <strong id="security-status">ACTIVE</strong>
+                    <strong id="security-status">UNKNOWN</strong>
                 </div>
 
                 <div class="card">
-                    <span class="card-label">MODE</span>
-                    <strong id="mode-status">DEVELOPMENT</strong>
+                    <span class="card-label">MODEL</span>
+                    <strong id="model-status">UNKNOWN</strong>
                 </div>
 
                 <div class="card">
-                    <span class="card-label">VERSION</span>
-                    <strong id="version-status">V1</strong>
+                    <span class="card-label">RUNTIME</span>
+                    <strong id="runtime-status">UNKNOWN</strong>
+                </div>
+
+                <div class="card">
+                    <span class="card-label">AGENTS</span>
+                    <strong id="agent-status">UNKNOWN</strong>
                 </div>
 
             </div>
@@ -95,7 +105,17 @@
 
                 <div class="console-header">
                     <span>CONVERSATION</span>
-                    <span id="connection">CONNECTED</span>
+                    <span id="connection">AUTH REQUIRED</span>
+                </div>
+
+                <div class="api-auth">
+                    <label for="api-token">API bearer token</label>
+                    <input
+                        id="api-token"
+                        type="password"
+                        autocomplete="off"
+                        placeholder="Enter configured KAIRO_API_TOKEN"
+                    >
                 </div>
 
                 <div id="messages" class="messages">
@@ -103,7 +123,8 @@
                     <div class="message kairo">
                         <div class="message-name">KAIRO</div>
                         <div>
-                            KAIRO V1 is online. System initialized.
+                            Connect with an authorized API token to view KAIRO
+                            status and send requests.
                         </div>
                     </div>
 
@@ -134,10 +155,10 @@
 
     <footer>
 
-        <span>CORE: ONLINE</span>
-        <span>SECURITY: ACTIVE</span>
+        <span>CORE: <strong id="footer-core-status">UNKNOWN</strong></span>
+        <span>SECURITY: <strong id="footer-security-status">UNKNOWN</strong></span>
         <span>NETWORK: LOCAL</span>
-        <span>ENV: DEVELOPMENT</span>
+        <span>MODEL: <strong id="footer-model-status">UNKNOWN</strong></span>
 
     </footer>
 

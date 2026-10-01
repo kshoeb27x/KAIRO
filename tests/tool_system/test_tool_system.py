@@ -54,6 +54,12 @@ ToolRequest = (
 ToolManager = (
     manager_module.ToolManager
 )
+security_module = import_module(
+    "06_SECURITY.security_manager"
+)
+authority_module = import_module(
+    "06_SECURITY.Authority.authority"
+)
 
 BrowserTool = (
     browser_module.BrowserTool
@@ -103,7 +109,20 @@ def test_manager_registration():
 
 def test_tool_execution():
 
-    manager = ToolManager()
+    security = security_module.SecurityManager()
+    security.identity.create("tool-user", "Tool User")
+    security.authority.assign(
+        "tool-user",
+        authority_module.AuthorityLevel.USER,
+    )
+    security.permissions.grant("tool-user", "network.read")
+    context = security.context(
+        "tool-user",
+        "network.read",
+        "tool.echo",
+        "browser",
+    )
+    manager = ToolManager(security)
 
     manager.register(
         BrowserTool()
@@ -115,6 +134,7 @@ def test_tool_execution():
         {
             "message": "hello"
         },
+        context,
     )
 
     assert result.status == "COMPLETED"
@@ -123,7 +143,20 @@ def test_tool_execution():
 
 def test_tool_failure():
 
-    manager = ToolManager()
+    security = security_module.SecurityManager()
+    security.identity.create("tool-user", "Tool User")
+    security.authority.assign(
+        "tool-user",
+        authority_module.AuthorityLevel.USER,
+    )
+    security.permissions.grant("tool-user", "network.read")
+    context = security.context(
+        "tool-user",
+        "network.read",
+        "tool.unknown",
+        "browser",
+    )
+    manager = ToolManager(security)
 
     manager.register(
         BrowserTool()
@@ -132,6 +165,7 @@ def test_tool_failure():
     result = manager.execute(
         "browser",
         "unknown",
+        context=context,
     )
 
     assert result.status == "FAILED"

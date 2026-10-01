@@ -1,6 +1,20 @@
 const messages = document.getElementById("messages");
 const command = document.getElementById("command");
 const send = document.getElementById("send");
+const apiToken = document.getElementById("api-token");
+
+
+function requestHeaders(includeContentType = false) {
+    const headers = {};
+    const token = apiToken.value.trim();
+    if (token) {
+        headers.Authorization = `Bearer ${token}`;
+    }
+    if (includeContentType) {
+        headers["Content-Type"] = "application/json";
+    }
+    return headers;
+}
 
 
 function addMessage(sender, text, type) {
@@ -74,9 +88,7 @@ async function sendMessage() {
 
             method: "POST",
 
-            headers: {
-                "Content-Type": "application/json"
-            },
+            headers: requestHeaders(true),
 
             body: JSON.stringify({
                 message: message
@@ -85,6 +97,15 @@ async function sendMessage() {
         });
 
         const data = await response.json();
+
+        if (!response.ok) {
+            addMessage(
+                "SYSTEM",
+                data.error || `Request failed (${response.status}).`,
+                "kairo"
+            );
+            return;
+        }
 
         if (data.response === "__EXIT__") {
 
@@ -103,7 +124,7 @@ async function sendMessage() {
             "kairo"
         );
 
-    } catch (error) {
+    } catch {
 
         addMessage(
             "SYSTEM",
@@ -121,24 +142,58 @@ async function loadStatus() {
 
     try {
 
-        const response = await fetch("/api/status");
+        const response = await fetch("/api/status", {
+            headers: requestHeaders()
+        });
 
         const status = await response.json();
+        if (!response.ok) {
+            const connection = response.status === 401
+                ? "AUTH REQUIRED"
+                : response.status === 403
+                    ? "FORBIDDEN"
+                    : `ERROR ${response.status}`;
+            document.getElementById("connection").textContent = connection;
+            document.getElementById("system-status").textContent = connection;
+            document.getElementById("system-card-status").textContent = connection;
+            document.getElementById("system-dot").dataset.status = "OFFLINE";
+            return;
+        }
+
         const components = status.components || {};
         const core = components.core || {};
         const security = components.security || {};
+        const runtime = components.runtime || {};
+        const agents = components.agents || {};
+        const model = components.model || {};
 
+        document.getElementById("system-status").textContent =
+            status.status || "UNKNOWN";
+        document.getElementById("system-card-status").textContent =
+            status.status || "UNKNOWN";
+        document.getElementById("system-dot").dataset.status =
+            status.status || "UNKNOWN";
         document.getElementById("core-status").textContent =
             status.core || core.core || "UNKNOWN";
 
         document.getElementById("security-status").textContent =
-            status.security || security.status || "UNKNOWN";
+            security.status || "UNKNOWN";
 
-        document.getElementById("mode-status").textContent =
-            status.mode || core.mode || "UNKNOWN";
+        document.getElementById("model-status").textContent =
+            model.status || "UNKNOWN";
 
-        document.getElementById("version-status").textContent =
-            status.version || core.version || "UNKNOWN";
+        document.getElementById("runtime-status").textContent =
+            runtime.status || "UNKNOWN";
+
+        document.getElementById("agent-status").textContent =
+            agents.status || "UNKNOWN";
+
+        document.getElementById("footer-core-status").textContent =
+            status.core || core.core || "UNKNOWN";
+        document.getElementById("footer-security-status").textContent =
+            security.status || "UNKNOWN";
+        document.getElementById("footer-model-status").textContent =
+            model.status || "UNKNOWN";
 
         document.getElementById("connection").textContent =
             "CONNECTED";
@@ -147,6 +202,9 @@ async function loadStatus() {
 
         document.getElementById("connection").textContent =
             "OFFLINE";
+        document.getElementById("system-status").textContent = "OFFLINE";
+        document.getElementById("system-card-status").textContent = "OFFLINE";
+        document.getElementById("system-dot").dataset.status = "OFFLINE";
     }
 }
 
@@ -164,3 +222,4 @@ command.addEventListener("keydown", event => {
 
 
 loadStatus();
+apiToken.addEventListener("change", loadStatus);

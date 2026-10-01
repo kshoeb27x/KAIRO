@@ -10,10 +10,12 @@ from .tool import ToolRequest
 class ToolManager:
     """Unified management interface for KAIRO tools."""
 
-    def __init__(self) -> None:
+    def __init__(self, security: Any | None = None) -> None:
         self.registry = ToolRegistry()
+        self.security = security
         self.executor = ToolExecutor(
-            self.registry
+            self.registry,
+            security,
         )
 
     def register(self, tool: Any) -> None:
@@ -41,15 +43,18 @@ class ToolManager:
         tool: str,
         action: str,
         arguments: dict | None = None,
+        context: Any | None = None,
     ):
         request = ToolRequest(
             tool=tool,
             action=action,
             arguments=arguments or {},
+            context=context,
         )
 
         return self.executor.execute(
-            request
+            request,
+            context,
         )
 
     def health(self) -> dict:

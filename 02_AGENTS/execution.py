@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import inspect
 from typing import Any
 from uuid import uuid4
 
@@ -11,6 +12,7 @@ class AgentRequest:
     agent: str
     task: str
     request_id: str = ""
+    context: Any | None = None
 
     def __post_init__(self) -> None:
         if not self.request_id:
@@ -40,7 +42,19 @@ class AgentExecutor:
         started = datetime.now().isoformat()
 
         try:
-            result = agent.execute(request.task)
+            parameters = inspect.signature(agent.execute).parameters
+            accepts_context = (
+                "context" in parameters
+                or any(
+                    parameter.kind == inspect.Parameter.VAR_KEYWORD
+                    for parameter in parameters.values()
+                )
+            )
+            result = (
+                agent.execute(request.task, context=request.context)
+                if accepts_context
+                else agent.execute(request.task)
+            )
 
             if hasattr(result, "status"):
                 status = result.status

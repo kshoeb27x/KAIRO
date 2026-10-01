@@ -22,10 +22,22 @@ class Permission(str, Enum):
     READ_DATA = "read_data"
     WRITE_DATA = "write_data"
     USE_TOOLS = "use_tools"
+    DELEGATE = "delegate"
     BROWSER = "browser"
     COMPUTER_USE = "computer_use"
     NETWORK = "network"
     MODIFY_SYSTEM = "modify_system"
+    ENGINEERING_INSPECT = "engineering_inspect"
+    ENGINEERING_PLAN = "engineering_plan"
+    ENGINEERING_MODIFY = "engineering_modify"
+    ENGINEERING_MODIFY_TESTS = "engineering_modify_tests"
+    ENGINEERING_TEST = "engineering_test"
+    ENGINEERING_CHECKPOINT = "engineering_checkpoint"
+    ENGINEERING_ROLLBACK = "engineering_rollback"
+    FILESYSTEM_WRITE = "filesystem_write"
+    PROCESS_EXECUTE = "process_execute"
+    MODEL_EXTERNAL = "model_external"
+    CREATE_TASK = "create_task"
 
 
 @dataclass(frozen=True)

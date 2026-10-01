@@ -144,8 +144,24 @@ def test_manager_registration():
 
 
 def test_manager_execution():
+    from importlib import import_module
 
-    manager = AgentManager()
+    security = import_module(
+        "06_SECURITY.security_manager"
+    ).SecurityManager()
+    authority = import_module(
+        "06_SECURITY.Authority.authority"
+    ).AuthorityLevel
+    security.identity.create("test-user", "Test User")
+    security.authority.assign("test-user", authority.USER)
+    security.permissions.grant("test-user", "agent.execute")
+    security.permissions.grant("test-user", "runtime.execute")
+    from importlib import import_module
+
+    runtime = import_module(
+        "07_RUNTIME.runtime_manager"
+    ).RuntimeManager(security)
+    manager = AgentManager(runtime, security)
 
     manager.register(
         DemoAgent()
@@ -154,6 +170,12 @@ def test_manager_execution():
     result = manager.execute(
         "demo",
         "live test",
+        context=security.context(
+            "test-user",
+            "agent.execute",
+            "agent.execute",
+            "demo",
+        ),
     )
 
     assert result.status == "COMPLETED"

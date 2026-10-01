@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from AI.ai import KairoAI
 
@@ -26,6 +27,7 @@ class KairoReasoner:
         self,
         message: str,
         context_history: list[str] | None = None,
+        execution_context: Any | None = None,
     ) -> ReasoningResult:
         message = message.strip()
 
@@ -70,8 +72,15 @@ class KairoReasoner:
             confidence = 1.0
             reasoning = "Input explicitly requests a data task."
 
+        elif lowered.startswith(
+            ("engineering ", "implement ", "fix tests", "fix failing tests", "build ")
+        ):
+            intent = "engineering_request"
+            confidence = 1.0
+            reasoning = "Input explicitly requests repository engineering work."
+
         else:
-            ai_response = self.ai.generate(message)
+            ai_response = self.ai.generate(message, execution_context)
             intent = "general_request"
             confidence = 0.5
             reasoning = ai_response.content

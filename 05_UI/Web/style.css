@@ -65,8 +65,21 @@ body {
     width: 7px;
     height: 7px;
     border-radius: 50%;
-    background: #8bd450;
+    background: #778293;
     margin-right: 7px;
+}
+
+.dot[data-status="ONLINE"] {
+    background: #8bd450;
+}
+
+.dot[data-status="DEGRADED"] {
+    background: #e2ac45;
+}
+
+.dot[data-status="EMERGENCY_STOP"],
+.dot[data-status="OFFLINE"] {
+    background: #dc5b5b;
 }
 
 .layout {
@@ -192,6 +205,31 @@ body {
     flex: 1;
     overflow-y: auto;
     padding: 20px;
+}
+
+.api-auth {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    border-bottom: 1px solid #202632;
+    color: #778293;
+    font-size: 10px;
+    letter-spacing: 1px;
+}
+
+.api-auth input {
+    flex: 1;
+    min-width: 0;
+    background: #0e1219;
+    border: 1px solid #252d39;
+    color: white;
+    padding: 9px;
+    outline: none;
+}
+
+.api-auth input:focus {
+    border-color: #596575;
 }
 
 .message {

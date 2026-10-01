@@ -11,6 +11,9 @@ secrets/
 data/raw/
 data/processed/
 *.log
+03_DATA/Database/security_audit.sqlite3
+03_DATA/Database/kairo_database.sqlite3
+03_DATA/Database/kairo_memory.sqlite3
 .pytest_cache/
 .vscode/
 .idea/

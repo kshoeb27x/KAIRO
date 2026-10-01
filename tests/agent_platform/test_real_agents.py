@@ -28,6 +28,12 @@ Permission = import_module(
 AgentState = import_module(
     "02_AGENTS.authority"
 ).AgentState
+SecurityManager = import_module(
+    "06_SECURITY.security_manager"
+).SecurityManager
+AuthorityLevel = import_module(
+    "06_SECURITY.Authority.authority"
+).AuthorityLevel
 
 CodingAgent = import_module(
     "02_AGENTS.Coding.coding_agent"
@@ -43,7 +49,21 @@ ResearchAgent = import_module(
 
 
 def build_manager() -> AgentManager:
-    manager = AgentManager()
+    security = SecurityManager()
+    security.identity.create("agent-test-user", "Agent Test User")
+    security.authority.assign(
+        "agent-test-user",
+        AuthorityLevel.USER,
+    )
+    security.permissions.grant(
+        "agent-test-user",
+        "agent.execute",
+    )
+    security.permissions.grant(
+        "agent-test-user",
+        "runtime.execute",
+    )
+    manager = AgentManager(security=security)
 
     manager.register(
         CodingAgent(),
@@ -83,6 +103,15 @@ def build_manager() -> AgentManager:
     return manager
 
 
+def execution_context(manager: AgentManager):
+    return manager.security.context(
+        "agent-test-user",
+        "agent.execute",
+        "agent.execute",
+        "agent",
+    )
+
+
 def test_real_agents_register():
     manager = build_manager()
 
@@ -109,9 +138,10 @@ def test_coding_agent_execution():
     result = manager.execute(
         "coding",
         "create a KAIRO module",
+        context=execution_context(manager),
     )
 
-    assert result.status == "COMPLETED"
+    assert result.status == "UNAVAILABLE"
     assert result.agent == "coding"
 
 
@@ -121,9 +151,10 @@ def test_data_agent_execution():
     result = manager.execute(
         "data",
         "process KAIRO data",
+        context=execution_context(manager),
     )
 
-    assert result.status == "COMPLETED"
+    assert result.status == "UNAVAILABLE"
     assert result.agent == "data"
 
 
@@ -133,9 +164,10 @@ def test_research_agent_execution():
     result = manager.execute(
         "research",
         "research KAIRO architecture",
+        context=execution_context(manager),
     )
 
-    assert result.status == "COMPLETED"
+    assert result.status == "UNAVAILABLE"
     assert result.agent == "research"
 
 
@@ -153,6 +185,7 @@ def test_pause_blocks_real_agent():
         manager.execute(
             "coding",
             "this must be blocked",
+            context=execution_context(manager),
         )
     except Exception as exc:
         assert "not RUNNING" in str(exc)
@@ -176,6 +209,7 @@ def test_stop_blocks_real_agent():
         manager.execute(
             "data",
             "this must be blocked",
+            context=execution_context(manager),
         )
     except Exception as exc:
         assert "not RUNNING" in str(exc)
@@ -191,21 +225,24 @@ def test_real_agents_health():
     manager.execute(
         "coding",
         "health test",
+        context=execution_context(manager),
     )
 
     manager.execute(
         "data",
         "health test",
+        context=execution_context(manager),
     )
 
     manager.execute(
         "research",
         "health test",
+        context=execution_context(manager),
     )
 
     health = manager.health()
 
-    assert health["status"] == "ONLINE"
+    assert health["status"] == "DEGRADED"
     assert health["count"] == 3
 
     assert health["execution_counts"] == {
@@ -215,7 +252,7 @@ def test_real_agents_health():
     }
 
     assert health["last_status"] == {
-        "coding": "COMPLETED",
-        "data": "COMPLETED",
-        "research": "COMPLETED",
+        "coding": "UNAVAILABLE",
+        "data": "UNAVAILABLE",
+        "research": "UNAVAILABLE",
     }

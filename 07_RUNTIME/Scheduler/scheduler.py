@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime
+import inspect
 from typing import Any, Callable
 
 
@@ -23,7 +24,11 @@ class Scheduler:
     can be added later.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        security: Any | None = None,
+        should_stop: Callable[[], bool] | None = None,
+    ) -> None:
 
         self._jobs: dict[
             int,
@@ -34,6 +39,8 @@ class Scheduler:
             int,
             Callable[..., Any],
         ] = {}
+        self.security = security
+        self.should_stop = should_stop
 
         self._next_id = 1
 
@@ -42,6 +49,7 @@ class Scheduler:
         name: str,
         interval_seconds: float,
         function: Callable[..., Any],
+        context: Any | None = None,
     ) -> dict[str, Any]:
 
         if interval_seconds <= 0:
@@ -49,6 +57,12 @@ class Scheduler:
                 "interval_seconds must be positive"
             )
 
+        self._authorize(
+            context,
+            "runtime.schedule",
+            "runtime.schedule",
+            name,
+        )
         job = ScheduledJob(
             id=self._next_id,
             name=name,
@@ -65,6 +79,7 @@ class Scheduler:
     def run(
         self,
         job_id: int,
+        context: Any | None = None,
     ) -> Any:
 
         job = self._jobs[job_id]
@@ -76,27 +91,88 @@ class Scheduler:
 
         function = self._functions[job_id]
 
-        result = function()
+        if self.should_stop is not None and self.should_stop():
+            operation_context = self._authorize(
+                context,
+                "runtime.execute",
+                "runtime.scheduled.execute",
+                job.name,
+            )
+            self.security.audit_execution(
+                operation_context,
+                "DENY",
+                "EMERGENCY_STOP",
+            )
+            raise PermissionError(
+                "Scheduled execution blocked by emergency stop."
+            )
+
+        operation_context = self._authorize(
+            context,
+            "runtime.execute",
+            "runtime.scheduled.execute",
+            job.name,
+        )
+
+        try:
+            parameters = inspect.signature(function).parameters
+            accepts_context = (
+                "context" in parameters
+                or any(
+                    parameter.kind == inspect.Parameter.VAR_KEYWORD
+                    for parameter in parameters.values()
+                )
+            )
+            result = (
+                function(context=operation_context)
+                if accepts_context
+                else function()
+            )
+        except Exception as error:
+            self.security.audit_execution(
+                operation_context,
+                "FAILED",
+                str(error),
+            )
+            raise
 
         job.last_run = (
             datetime.now().isoformat()
         )
 
         job.run_count += 1
+        self.security.audit_execution(
+            operation_context,
+            "COMPLETED",
+        )
 
         return result
 
     def cancel(
         self,
         job_id: int,
+        context: Any | None = None,
     ) -> bool:
-
         job = self._jobs.get(job_id)
+        operation_context = self._authorize(
+            context,
+            "runtime.schedule",
+            "runtime.schedule.cancel",
+            str(job_id),
+        )
 
         if job is None:
+            self.security.audit_execution(
+                operation_context,
+                "NOT_FOUND",
+            )
             return False
 
         job.enabled = False
+        self.security.audit_execution(
+            operation_context,
+            "CANCELLED",
+        )
 
         return True
 
@@ -120,3 +196,47 @@ class Scheduler:
                 if job.enabled
             ),
         }
+
+    def _authorize(
+        self,
+        context: Any | None,
+        permission: str,
+        operation: str,
+        resource: str,
+    ) -> Any:
+        if self.security is None or context is None:
+            if self.security is not None:
+                self.security.audit.record(
+                    "AUTHORIZATION",
+                    None,
+                    operation,
+                    "DENY",
+                    {
+                        "permission": permission,
+                        "resource": resource,
+                        "reason": "MISSING_CONTEXT_OR_SECURITY",
+                    },
+                )
+            raise PermissionError(
+                "Scheduled operations require an authorization context."
+            )
+
+        operation_context = context.derive(
+            permission=permission,
+            operation=operation,
+            resource=resource,
+        )
+        decision = self.security.authorize_context(
+            operation_context,
+            permission,
+        )
+        if not decision.allowed:
+            self.security.audit_execution(
+                operation_context,
+                decision.decision,
+                decision.reason,
+            )
+            raise PermissionError(
+                f"Scheduled operation denied: {decision.reason}"
+            )
+        return operation_context

@@ -1,11 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
 
-from importlib import import_module
-
-RuntimeManager = import_module("07_RUNTIME.runtime_manager").RuntimeManager
+from src.core.runtime_controller import KairoRuntime
 from src.core.orchestrator_loader import KairoOrchestrator
 
 
@@ -14,20 +12,15 @@ class KairoCore:
 
     VERSION = "V2"
 
-    def __init__(
-        self,
-        runtime: Any | None = None,
-        security: Any | None = None,
-    ) -> None:
+    def __init__(self, runtime: Any | None = None) -> None:
         self.name = "KAIRO"
         self.version = self.VERSION
         self.started_at = datetime.now()
 
-        self.runtime = runtime or RuntimeManager()
+        self.runtime = runtime or KairoRuntime()
 
-        self.orchestrator: Any = KairoOrchestrator(
-            runtime=self.runtime,
-            security=security,
+        self.orchestrator = KairoOrchestrator(
+            runtime=self.runtime
         )
 
         self.agent_manager = self.orchestrator.agents
@@ -66,12 +59,10 @@ class KairoCore:
         self,
         name: str,
         task: str,
-        context: Any | None = None,
     ) -> dict[str, Any]:
         execution = self.agent_manager.execute(
             name,
             task,
-            context=context,
         )
 
         return {
@@ -87,42 +78,28 @@ class KairoCore:
     def create_task(
         self,
         name: str,
-        context: Any | None = None,
     ) -> dict[str, Any]:
-        return self.runtime.create_task(name, context)
+        return self.runtime.create_task(name)
 
     def respond(
         self,
         message: str,
-        context: Any | None = None,
     ) -> str:
-        return self.orchestrator.dispatch(message, context)
+        return self.orchestrator.dispatch(message)
 
     def events(
         self,
         limit: int = 50,
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict]:
         return self.runtime.recent_events(limit)
 
     def health(self) -> dict[str, Any]:
-        runtime_health = self.runtime.health()
-        runtime_status = runtime_health.get("runtime", {}).get(
-            "status",
-            runtime_health.get("status", "UNKNOWN"),
-        )
         return {
             "system": self.name,
             "version": self.version,
-            "core": (
-                "EMERGENCY_STOP"
-                if runtime_status == "EMERGENCY_STOP"
-                else "ONLINE"
-            ),
+            "core": "ONLINE",
             "mode": "DEVELOPMENT",
-            "runtime": runtime_health.get(
-                "runtime",
-                self.runtime.status(),
-            ),
+            "runtime": self.runtime.status(),
             "agents": self.list_agents(),
             "agent_health": self.agent_manager.health(),
             "started_at": self.started_at.isoformat(),
@@ -130,16 +107,11 @@ class KairoCore:
 
     def status(self) -> dict[str, Any]:
         runtime_status = self.runtime.status()
-        core_status = (
-            "EMERGENCY_STOP"
-            if runtime_status.get("status") == "EMERGENCY_STOP"
-            else "ONLINE"
-        )
 
         return {
             "system": self.name,
             "version": self.version,
-            "core": core_status,
+            "core": "ONLINE",
             "mode": "DEVELOPMENT",
             "runtime": runtime_status,
             "registered_agents": len(
